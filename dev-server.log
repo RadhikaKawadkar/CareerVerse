@@ -1,0 +1,160 @@
+
+> careerverse@0.1.0 dev
+> next dev --turbopack
+
+   ▲ Next.js 15.5.18 (Turbopack)
+   - Local:        http://localhost:3001
+   - Network:      http://192.168.31.227:3001
+
+ ✓ Starting...
+ ✓ Ready in 3.1s
+ ○ Compiling / ...
+ ✓ Compiled / in 12.6s
+ GET / 200 in 14378ms
+ ○ Compiling /onboarding/1 ...
+ ✓ Compiled /onboarding/1 in 1457ms
+ GET /onboarding/1 200 in 1910ms
+ ○ Compiling /onboarding/2 ...
+ ✓ Compiled /onboarding/2 in 1350ms
+ GET /onboarding/2 200 in 1651ms
+ ○ Compiling /onboarding/3 ...
+ ✓ Compiled /onboarding/3 in 1162ms
+ GET /onboarding/3 200 in 1426ms
+ ○ Compiling /explore ...
+ ✓ Compiled /explore in 980ms
+ GET /explore 200 in 1220ms
+ GET / 200 in 458ms
+ ✓ Compiled in 416ms
+ GET / 200 in 423ms
+ GET / 200 in 335ms
+ GET / 200 in 360ms
+ GET / 200 in 385ms
+ GET / 200 in 537ms
+ ✓ Compiled /onboarding/1 in 161ms
+ GET /onboarding/1 200 in 1307ms
+ ○ Compiling /onboarding/2 ...
+ ✓ Compiled /onboarding/2 in 527ms
+ GET /onboarding/2 200 in 1123ms
+ ○ Compiling /onboarding/3 ...
+ ✓ Compiled /onboarding/3 in 852ms
+ GET /onboarding/3 200 in 1314ms
+ ✓ Compiled /explore in 156ms
+ GET /explore 200 in 602ms
+ ○ Compiling /explore/science/intro ...
+ ✓ Compiled /explore/science/intro in 950ms
+ GET /explore/science/intro 200 in 1948ms
+ ○ Compiling /explore/science/section-1 ...
+ ✓ Compiled /explore/science/section-1 in 1437ms
+ GET /explore/science/section-1 200 in 1725ms
+ ○ Compiling /explore/science/section-2 ...
+ ✓ Compiled /explore/science/section-2 in 1307ms
+ GET /explore/science/section-2 200 in 1550ms
+ ○ Compiling /explore/science/section-3 ...
+ ✓ Compiled /explore/science/section-3 in 1278ms
+ GET /explore/science/section-3 200 in 1601ms
+ ○ Compiling /explore/science/quiz ...
+ ✓ Compiled /explore/science/quiz in 924ms
+ GET /explore/science/quiz 200 in 1186ms
+ ○ Compiling /explore/science/reflection ...
+ ✓ Compiled /explore/science/reflection in 947ms
+ GET /explore/science/reflection 200 in 1295ms
+ GET /explore 200 in 366ms
+ ○ Compiling /explore/software-engineer/intro ...
+ ✓ Compiled /explore/software-engineer/intro in 810ms
+ GET /explore/software-engineer/intro 200 in 1366ms
+ ○ Compiling /explore/software-engineer/scene-1 ...
+ ✓ Compiled /explore/software-engineer/scene-1 in 1438ms
+ GET /explore/software-engineer/scene-1 200 in 1763ms
+ ○ Compiling /explore/software-engineer/scene-2 ...
+ ✓ Compiled /explore/software-engineer/scene-2 in 1173ms
+ GET /explore/software-engineer/scene-2 200 in 1429ms
+ ○ Compiling /explore/software-engineer/scene-3 ...
+ ✓ Compiled /explore/software-engineer/scene-3 in 1250ms
+ GET /explore/software-engineer/scene-3 200 in 1531ms
+ ○ Compiling /explore/software-engineer/debrief ...
+ ✓ Compiled /explore/software-engineer/debrief in 1075ms
+ GET /explore/software-engineer/debrief 200 in 1633ms
+ ○ Compiling /explore/software-engineer/reflection ...
+ ✓ Compiled /explore/software-engineer/reflection in 893ms
+ GET /explore/software-engineer/reflection 200 in 1151ms
+ GET /explore 200 in 387ms
+ ○ Compiling /results ...
+ ✓ Compiled /results in 964ms
+ GET /results 200 in 1665ms
+ GET /onboarding/1 200 in 397ms
+ GET / 200 in 561ms
+ GET /onboarding/1 200 in 314ms
+ GET /onboarding/2 200 in 286ms
+ GET /onboarding/3 200 in 311ms
+ GET /explore 200 in 336ms
+ GET /explore/science/intro 200 in 316ms
+ GET /explore/science/section-1 200 in 281ms
+ GET /explore/science/section-2 200 in 290ms
+ GET /explore/science/section-3 200 in 295ms
+ GET /explore/science/quiz 200 in 302ms
+ GET /explore/science/reflection 200 in 521ms
+ GET /explore 200 in 285ms
+ GET /explore/software-engineer/intro 200 in 302ms
+ GET /explore/software-engineer/scene-1 200 in 274ms
+ GET /explore/software-engineer/scene-2 200 in 294ms
+ GET /explore/software-engineer/scene-3 200 in 302ms
+ GET /explore/software-engineer/debrief 200 in 273ms
+ GET /explore/software-engineer/reflection 200 in 538ms
+ GET /explore 200 in 294ms
+ GET /results 200 in 340ms
+ GET /onboarding/1 200 in 284ms
+ GET / 200 in 271ms
+ ✓ Compiled in 547ms
+ GET / 200 in 368ms
+ ✓ Compiled in 124ms
+ ✓ Compiled in 197ms
+ ✓ Compiled in 219ms
+ ✓ Compiled in 347ms
+ ✓ Compiled in 173ms
+ GET / 200 in 292ms
+ GET / 200 in 265ms
+ GET / 200 in 263ms
+ GET / 200 in 243ms
+ ✓ Compiled in 458ms
+ ✓ Compiled in 516ms
+ ✓ Compiled in 296ms
+ ✓ Compiled in 594ms
+ GET / 200 in 981ms
+ GET / 200 in 959ms
+ ✓ Compiled in 556ms
+ GET / 200 in 382ms
+ ✓ Compiled in 296ms
+ ✓ Compiled in 196ms
+ GET / 200 in 1642ms
+ GET /onboarding/1 200 in 517ms
+ GET / 200 in 536ms
+ GET / 200 in 503ms
+ GET /onboarding/1 200 in 436ms
+ GET /onboarding/2 200 in 611ms
+ GET /onboarding/3 200 in 546ms
+ GET /explore 200 in 1280ms
+ GET /explore/science/intro 200 in 477ms
+ GET /explore/science/section-1 200 in 1354ms
+ GET /explore/science/section-2 200 in 1291ms
+ GET /explore/science/section-3 200 in 1146ms
+ ✓ Compiled /explore/science/quiz in 154ms
+ GET /explore/science/quiz 200 in 1162ms
+ ✓ Compiled /explore/science/reflection in 160ms
+ GET /explore/science/reflection 200 in 1208ms
+ GET /explore/software-engineer/intro 200 in 495ms
+ ✓ Compiled /explore/software-engineer/scene-1 in 163ms
+ GET /explore/software-engineer/scene-1 200 in 1393ms
+ ✓ Compiled /explore/software-engineer/scene-2 in 116ms
+ GET /explore/software-engineer/scene-2 200 in 484ms
+ ✓ Compiled /explore/software-engineer/scene-3 in 126ms
+ GET /explore/software-engineer/scene-3 200 in 528ms
+ ✓ Compiled /explore/software-engineer/debrief in 153ms
+ GET /explore/software-engineer/debrief 200 in 1252ms
+ ✓ Compiled /explore/software-engineer/reflection in 157ms
+ GET /explore/software-engineer/reflection 200 in 1185ms
+ GET /results 200 in 1277ms
+ ✓ Compiled in 377ms
+ ✓ Compiled in 486ms
+ GET / 200 in 381ms
+ ✓ Compiled in 285ms
+ GET / 200 in 368ms

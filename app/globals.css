@@ -1,0 +1,123 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 239 84% 67%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 239 84% 67%;
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@keyframes hub-success-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.35);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(99, 102, 241, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
+  }
+}
+
+@keyframes hub-ring-pop {
+  0% {
+    transform: scale(0.92);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes hub-unlock {
+  0% {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes cv-confetti-pop {
+  0% {
+    transform: translateY(0) scale(0.8) rotate(0deg);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-28px) scale(1) rotate(18deg);
+    opacity: 0;
+  }
+}
+
+.cv-confetti-piece {
+  animation: cv-confetti-pop 1.2s ease-out infinite;
+}
+
+.hub-success-pulse {
+  animation: hub-success-pulse 1.2s ease-out 1;
+}
+
+.hub-ring-pop {
+  animation: hub-ring-pop 0.6s ease-out 1;
+}
+
+.hub-unlock {
+  animation: hub-unlock 0.5s ease-out 1;
+}
+
+@layer utilities {
+  .cv-card {
+    @apply rounded-2xl border border-border bg-card shadow-sm;
+  }
+
+  .cv-card-elevated {
+    @apply rounded-2xl border border-border bg-card shadow-md transition-shadow duration-300 hover:shadow-lg;
+  }
+
+  .cv-section-gap {
+    @apply flex flex-col gap-6 sm:gap-8;
+  }
+
+  .cv-heading {
+    @apply font-[family-name:var(--font-plus-jakarta)] font-bold tracking-tight;
+  }
+
+  .cv-sticky-cta {
+    @apply sticky bottom-0 z-10 mt-2 border-t border-border/80 bg-background/95 pt-4 backdrop-blur-sm;
+  }
+}
