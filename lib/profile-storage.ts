@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import {
   DEFAULT_CAREERVERSE_DATA,
   DEFAULT_GUEST_PROFILE,
@@ -11,6 +12,8 @@ import {
   type SweSceneChoice,
   type SweSimulationStep,
 } from "@/types/profile";
+import { db } from "./database";
+import { supabase } from "./supabase";
 
 const STORAGE_KEY = "careerverse-data";
 const LEGACY_STORAGE_KEY = "careerverse-guest-profile";
@@ -54,8 +57,9 @@ function normalizeData(data: DeepPartial<CareerVerseData>): CareerVerseData {
       },
     },
     quiz: {
-      ...DEFAULT_CAREERVERSE_DATA.quiz,
-      ...data.quiz,
+      completed: data.quiz?.completed ?? DEFAULT_CAREERVERSE_DATA.quiz.completed,
+      score: data.quiz?.score ?? DEFAULT_CAREERVERSE_DATA.quiz.score,
+      answers: (data.quiz?.answers || []).filter((a): a is string => typeof a === "string"),
     },
   };
 }
@@ -91,7 +95,7 @@ function legacyToData(legacy: Partial<GuestProfile>): CareerVerseData {
   });
 }
 
-function dataToGuestProfile(data: CareerVerseData): GuestProfile {
+function dataGuestProfile(data: CareerVerseData): GuestProfile {
   const onboardingCompleted =
     Boolean(data.profile.name.trim()) &&
     data.profile.grade !== null &&
@@ -156,6 +160,119 @@ export function getCareerVerseData(): CareerVerseData {
   }
 }
 
+// Background synchronization with Supabase
+function syncToSupabase(updates: DeepPartial<CareerVerseData>) {
+  if (typeof window === "undefined") return;
+
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    const userId = session?.user?.id;
+    if (!userId) return;
+
+    // 1. Sync Profile Updates
+    if (updates.profile) {
+      const current = getCareerVerseData();
+      const hasOnboarding =
+        Boolean(current.profile.name) &&
+        current.profile.grade !== null &&
+        current.profile.suggestedPath !== null;
+
+      db.updateProfile(userId, {
+        name: current.profile.name,
+        grade: current.profile.grade,
+        suggested_path: current.profile.suggestedPath || null,
+        career_pressure: current.profile.suggestedPath || null,
+        onboarding_completed: hasOnboarding,
+      }).catch((err) => console.error("Sync profile error:", err));
+    }
+
+    // 2. Sync Science Simulation
+    if (updates.science) {
+      const current = getCareerVerseData();
+      db.upsertSimulation(userId, {
+        career_name: "science",
+        completion_status: current.science.completed ? "completed" : "in_progress",
+        current_step: current.science.step || "intro",
+        reflection_interest: current.science.enjoyment,
+        reflection_confidence: current.science.fit,
+        ending_unlocked: current.science.completed ? "Completed Physics Lesson" : null,
+      }).catch((err) => console.error("Sync science error:", err));
+
+      if (updates.science.completed && updates.science.enjoyment !== null) {
+        db.addJournalEntry(
+          userId,
+          `Completed the grade 11 Physics lesson. Rated interest: ${current.science.enjoyment}/5, confidence: ${current.science.fit}/5.`,
+          "science"
+        ).catch((err) => console.error("Sync science journal error:", err));
+
+        // Add XP & achievements
+        db.getProfile(userId).then((prof) => {
+          if (prof) {
+            const achievements = Array.from(new Set([...(prof.achievements || []), "science_pioneer"]));
+            db.updateProfile(userId, {
+              xp: (prof.xp || 0) + 100,
+              achievements,
+            }).catch((err) => console.error("Sync science XP error:", err));
+          }
+        });
+      }
+    }
+
+    // 3. Sync SWE Simulation
+    if (updates.simulation) {
+      const current = getCareerVerseData();
+      const choices = current.simulation.choices;
+      db.upsertSimulation(userId, {
+        career_name: "software-engineer",
+        choices_made: choices as any,
+        completion_status: current.simulation.completed ? "completed" : "in_progress",
+        current_step: current.simulation.step || "intro",
+        reflection_interest: current.simulation.enjoyment,
+        reflection_confidence: current.simulation.fit,
+        ending_unlocked: current.simulation.completed ? "Finished SWE Day" : null,
+      }).catch((err) => console.error("Sync swe error:", err));
+
+      if (updates.simulation.completed && updates.simulation.enjoyment !== null) {
+        db.addJournalEntry(
+          userId,
+          `Completed the Software Engineer simulation. Choices: Standup: ${choices.scene1}, Bug: ${choices.scene2}, Deadline: ${choices.scene3}. Interest: ${current.simulation.enjoyment}/5, confidence: ${current.simulation.fit}/5.`,
+          "software-engineer"
+        ).catch((err) => console.error("Sync swe journal error:", err));
+
+        // Add XP & achievements
+        db.getProfile(userId).then((prof) => {
+          if (prof) {
+            const achievements = Array.from(new Set([...(prof.achievements || []), "swe_explorer"]));
+            db.updateProfile(userId, {
+              xp: (prof.xp || 0) + 100,
+              achievements,
+            }).catch((err) => console.error("Sync swe XP error:", err));
+          }
+        });
+
+        // Sync DNA
+        let analytical = 3;
+        let creativity = 3;
+        let collaboration = 3;
+        let riskTolerance = 3;
+        if (choices.scene1 === "a") collaboration += 2;
+        if (choices.scene1 === "b") { analytical += 1; collaboration -= 1; }
+        if (choices.scene2 === "a") analytical += 2;
+        if (choices.scene2 === "b") { riskTolerance += 2; analytical -= 1; }
+        if (choices.scene3 === "a") { creativity += 2; riskTolerance += 1; }
+        if (choices.scene3 === "b") analytical += 1;
+
+        db.upsertCareerDna(userId, {
+          analytical: Math.min(10, analytical),
+          creativity: Math.min(10, creativity),
+          collaboration: Math.min(10, collaboration),
+          risk_tolerance: Math.min(10, riskTolerance),
+          archetype: analytical > collaboration ? "Builder" : collaboration > creativity ? "Team Catalyst" : "Explorer",
+        }).catch((err) => console.error("Sync DNA error:", err));
+      }
+    }
+  });
+}
+
 export function saveCareerVerseData(updates: DeepPartial<CareerVerseData>): CareerVerseData {
   const current = getCareerVerseData();
   const next = normalizeData({
@@ -176,6 +293,9 @@ export function saveCareerVerseData(updates: DeepPartial<CareerVerseData>): Care
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   }
 
+  // Trigger sync in the background
+  syncToSupabase(updates);
+
   return next;
 }
 
@@ -183,11 +303,20 @@ export function clearCareerVerseData(): void {
   if (isBrowser()) {
     window.localStorage.removeItem(STORAGE_KEY);
     window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+    window.localStorage.removeItem("careerverse-migrated");
   }
+
+  // Trigger Supabase data reset in background
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    const userId = session?.user?.id;
+    if (userId) {
+      db.resetUserData(userId).catch((err) => console.error("Error resetting Supabase user data:", err));
+    }
+  });
 }
 
 export function getGuestProfile(): GuestProfile {
-  return dataToGuestProfile(getCareerVerseData());
+  return dataGuestProfile(getCareerVerseData());
 }
 
 export function saveGuestProfile(updates: Partial<GuestProfile>): GuestProfile {
@@ -219,7 +348,7 @@ export function saveGuestProfile(updates: Partial<GuestProfile>): GuestProfile {
     },
   });
 
-  return dataToGuestProfile(next);
+  return dataGuestProfile(next);
 }
 
 export function clearGuestProfile(): void {
@@ -237,7 +366,7 @@ export function setExperienceStatus(
         step: status === "not_started" ? null : getCareerVerseData().science.step ?? "intro",
       },
     });
-    return dataToGuestProfile(next);
+    return dataGuestProfile(next);
   }
 
   const next = saveCareerVerseData({
@@ -246,7 +375,7 @@ export function setExperienceStatus(
       step: status === "not_started" ? null : getCareerVerseData().simulation.step ?? "intro",
     },
   });
-  return dataToGuestProfile(next);
+  return dataGuestProfile(next);
 }
 
 export function getCompletedExperienceCount(profile: GuestProfile): number {
@@ -273,7 +402,7 @@ export function saveScienceLessonStep(step: ScienceLessonStep): GuestProfile {
       step,
     },
   });
-  return dataToGuestProfile(next);
+  return dataGuestProfile(next);
 }
 
 export function completeScienceExperience(reflection: ScienceReflection): GuestProfile {
@@ -285,7 +414,7 @@ export function completeScienceExperience(reflection: ScienceReflection): GuestP
       step: "reflection",
     },
   });
-  return dataToGuestProfile(next);
+  return dataGuestProfile(next);
 }
 
 export function saveScienceQuizScore(score: number, answers: string[] = []): GuestProfile {
@@ -296,7 +425,7 @@ export function saveScienceQuizScore(score: number, answers: string[] = []): Gue
       answers,
     },
   });
-  return dataToGuestProfile(next);
+  return dataGuestProfile(next);
 }
 
 export function saveDemoJourney(): GuestProfile {
@@ -329,7 +458,7 @@ export function saveDemoJourney(): GuestProfile {
       answers: ["nature", "observe"],
     },
   });
-  return dataToGuestProfile(next);
+  return dataGuestProfile(next);
 }
 
 export function saveSweSimulationStep(step: SweSimulationStep): GuestProfile {
@@ -340,7 +469,7 @@ export function saveSweSimulationStep(step: SweSimulationStep): GuestProfile {
       step,
     },
   });
-  return dataToGuestProfile(next);
+  return dataGuestProfile(next);
 }
 
 export function saveSweChoice(
@@ -358,19 +487,84 @@ export function saveSweChoice(
       },
     },
   });
-  return dataToGuestProfile(next);
+  return dataGuestProfile(next);
 }
 
 export function completeSweExperience(reflection: SweReflection): GuestProfile {
-  const current = getCareerVerseData();
   const next = saveCareerVerseData({
     simulation: {
-      ...current.simulation,
       completed: true,
       enjoyment: reflection.interest,
       fit: reflection.confidence,
       step: "reflection",
     },
   });
-  return dataToGuestProfile(next);
+  return dataGuestProfile(next);
+}
+
+/**
+ * Pull database profile down to localStorage cache
+ */
+export async function pullDatabaseToLocal(userId: string): Promise<void> {
+  try {
+    const data = await db.getDashboardData(userId);
+    if (!data.profile) return;
+
+    const current: CareerVerseData = {
+      profile: {
+        name: data.profile.name || "",
+        grade: data.profile.grade,
+        suggestedPath: (data.profile.suggested_path || data.profile.career_pressure) as any,
+      },
+      science: {
+        completed: false,
+        enjoyment: null,
+        fit: null,
+        step: null,
+      },
+      simulation: {
+        completed: false,
+        enjoyment: null,
+        fit: null,
+        step: null,
+        choices: { scene1: null, scene2: null, scene3: null },
+      },
+      quiz: {
+        completed: false,
+        score: null,
+        answers: [],
+      },
+    };
+
+    const scienceSim = data.simulations.find((s) => s.career_name === "science");
+    if (scienceSim) {
+      current.science = {
+        completed: scienceSim.completion_status === "completed",
+        enjoyment: scienceSim.reflection_interest,
+        fit: scienceSim.reflection_confidence,
+        step: scienceSim.current_step as any,
+      };
+    }
+
+    const sweSim = data.simulations.find((s) => s.career_name === "software-engineer");
+    if (sweSim) {
+      current.simulation = {
+        completed: sweSim.completion_status === "completed",
+        enjoyment: sweSim.reflection_interest,
+        fit: sweSim.reflection_confidence,
+        step: sweSim.current_step as any,
+        choices: {
+          scene1: (sweSim.choices_made?.scene1 || null) as any,
+          scene2: (sweSim.choices_made?.scene2 || null) as any,
+          scene3: (sweSim.choices_made?.scene3 || null) as any,
+        },
+      };
+    }
+
+    if (isBrowser()) {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+    }
+  } catch (e) {
+    console.error("Error pulling database to local cache:", e);
+  }
 }

@@ -225,7 +225,7 @@ export function ResultsInsight() {
           </div>
           <div className="p-6">
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              {data.name}'s career signal
+              {data.name}&apos;s career signal
             </p>
             <p className="mt-3 text-lg font-semibold leading-snug text-foreground">
               {primaryInsight}

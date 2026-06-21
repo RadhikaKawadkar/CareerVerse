@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Plus_Jakarta_Sans } from "next/font/google";
+import { RootProvider } from "@/components/providers/root-provider";
 import "./globals.css";
 
 const inter = Inter({
@@ -25,8 +26,9 @@ export default function RootLayout({
   return (
     <html lang="en" className="scroll-smooth">
       <body className={`${inter.variable} ${plusJakarta.variable} font-sans antialiased`}>
-        {children}
+        <RootProvider>{children}</RootProvider>
       </body>
     </html>
   );
 }
+
