@@ -79,6 +79,7 @@ export type GuestProfile = {
   sweCompleted: boolean;
   scienceLessonStep: ScienceLessonStep | null;
   scienceQuizScore: number | null;
+  scienceQuizAnswers: string[];
   scienceReflection: ScienceReflection | null;
   sweSimulationStep: SweSimulationStep | null;
   sweChoices: SweSimulationChoices;
@@ -128,6 +129,7 @@ export const DEFAULT_GUEST_PROFILE: GuestProfile = {
   sweCompleted: false,
   scienceLessonStep: null,
   scienceQuizScore: null,
+  scienceQuizAnswers: [],
   scienceReflection: null,
   sweSimulationStep: null,
   sweChoices: DEFAULT_SWE_CHOICES,

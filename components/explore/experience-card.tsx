@@ -12,6 +12,7 @@ type ExperienceCardProps = {
   href: string;
   icon: LucideIcon;
   completed: boolean;
+  status: "not_started" | "in_progress" | "completed";
   accentClass: string;
   iconClass: string;
   onStart: () => void;
@@ -26,6 +27,7 @@ export function ExperienceCard({
   href,
   icon: Icon,
   completed,
+  status,
   accentClass,
   iconClass,
   onStart,
@@ -40,8 +42,10 @@ export function ExperienceCard({
         className={cn(
           "group block overflow-hidden rounded-2xl border bg-card shadow-md transition-all duration-300",
           "hover:shadow-xl",
-          completed
+          status === "completed"
             ? "border-emerald-500/35 shadow-emerald-500/10"
+            : status === "in_progress"
+            ? "border-sky-500/35 shadow-sky-500/10"
             : "border-border hover:border-primary/25",
         )}
       >
@@ -55,7 +59,7 @@ export function ExperienceCard({
               )}
             >
               <Icon className="h-5 w-5" />
-              {completed && (
+              {status === "completed" && (
                 <motion.span
                   initial={{ scale: 0 }}
                   animate={{ scale: 1 }}
@@ -70,13 +74,15 @@ export function ExperienceCard({
               layout
               className={cn(
                 "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold",
-                completed
-                  ? "bg-emerald-500/10 text-emerald-600"
-                  : "bg-muted text-muted-foreground",
+                status === "completed" && "bg-emerald-500/10 text-emerald-600",
+                status === "in_progress" && "bg-sky-500/10 text-sky-600",
+                status === "not_started" && "bg-muted text-muted-foreground",
               )}
             >
-              {completed && <CheckCircle2 className="h-3 w-3" />}
-              {completed ? "Completed" : "Not Started"}
+              {status === "completed" && <CheckCircle2 className="h-3 w-3" />}
+              {status === "completed" && "Completed"}
+              {status === "in_progress" && "In Progress"}
+              {status === "not_started" && "Not Started"}
             </motion.span>
           </div>
 

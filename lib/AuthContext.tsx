@@ -54,14 +54,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (signupError) throw signupError;
       
       if (data.user) {
-        // Automatically create their database profile
-        await db.createProfile(data.user.id, {
-          name,
-          onboarding_completed: false,
-          xp: 0,
-          achievements: [],
-          interests: [],
-        });
+        try {
+          await db.ensureUserProfile(data.user.id, email);
+        } catch (profileError) {
+          console.warn("Client profile initialization skipped:", profileError);
+        }
       }
     } catch (err: any) {
       setError(err.message || "An error occurred during sign up.");
@@ -151,6 +148,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         // Run local migration or sync if logged in
         if (currentSession?.user) {
+          await db.ensureUserProfile(currentSession.user.id, currentSession.user.email);
           const isMigrated = typeof window !== "undefined" && window.localStorage.getItem("careerverse-migrated");
           if (isMigrated === "true") {
             await pullDatabaseToLocal(currentSession.user.id);
@@ -170,6 +168,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(newSession?.user ?? null);
           
           if (event === "SIGNED_IN" && newSession?.user) {
+            await db.ensureUserProfile(newSession.user.id, newSession.user.email);
             const isMigrated = typeof window !== "undefined" && window.localStorage.getItem("careerverse-migrated");
             if (isMigrated === "true") {
               await pullDatabaseToLocal(newSession.user.id);

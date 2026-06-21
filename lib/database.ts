@@ -13,20 +13,32 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Pr
   }
 }
 
+// Format Supabase error cleanly
+export function formatSupabaseError(error: any): string {
+  if (!error) return "Unknown database error";
+  return `[Supabase Error] Code: ${error.code || "N/A"} | Message: ${error.message || "Unknown"} | Details: ${error.details || "None"} | Hint: ${error.hint || "None"}`;
+}
+
 // ----------------------------------------------------
 // Service Types
 // ----------------------------------------------------
 
 export type DbProfile = {
   id: string;
+  email?: string | null;
   name: string;
   grade: number | null;
   suggested_path: string | null;
   career_pressure: string | null;
   onboarding_completed: boolean;
   xp: number;
-  achievements: string[];
+  level?: number;
+  streak?: number;
+  rank?: string;
+  badges?: string[];
   interests: string[];
+  personality_signals?: string[];
+  achievements: string[];
 };
 
 export type DbCareerDna = {
@@ -35,6 +47,7 @@ export type DbCareerDna = {
   creativity: number;
   collaboration: number;
   risk_tolerance: number;
+  risk?: number;
   archetype: string;
 };
 
@@ -42,8 +55,11 @@ export type DbSimulation = {
   id?: string;
   user_id: string;
   career_name: string;
-  choices_made: Record<string, SweSceneChoice | null>;
+  career_id?: string;
+  choices: Record<string, SweSceneChoice | null>;
+  choices_made?: Record<string, SweSceneChoice | null>;
   completion_status: string;
+  completed?: boolean;
   ending_unlocked: string | null;
   reflection_interest: number | null;
   reflection_confidence: number | null;
@@ -56,13 +72,21 @@ export type DbJournalEntry = {
   user_id: string;
   reflection_text: string;
   career_reference: string;
+  career_id?: string;
+  content?: string;
+  excited?: string;
+  difficult?: string;
+  surprised?: string;
+  feeling?: number;
   created_at?: string;
+  timestamp?: string;
 };
 
 export type DbBookmark = {
   id?: string;
   user_id: string;
   career_name: string;
+  career_id?: string;
   created_at?: string;
 };
 
@@ -106,22 +130,30 @@ export const db = {
         .maybeSingle();
 
       if (error) {
-        console.error("Error fetching profile from Supabase:", error.message);
+        console.error("Error fetching profile from Supabase:", formatSupabaseError(error));
         throw error;
       }
+      
       if (!data) {
-        return await this.createProfile(userId, { name: "" });
+        return null;
       }
+
       return {
         id: data.id,
-        name: data.name,
+        email: data.email || null,
+        name: data.name || "",
         grade: data.grade,
-        suggested_path: data.suggested_path,
-        career_pressure: data.career_pressure,
-        onboarding_completed: data.onboarding_completed,
-        xp: data.xp,
-        achievements: Array.isArray(data.achievements) ? data.achievements : [],
+        suggested_path: data.suggested_path || data.career_pressure || null,
+        career_pressure: data.career_pressure || data.suggested_path || null,
+        onboarding_completed: data.onboarding_completed || false,
+        xp: data.xp || 0,
+        level: data.level || 1,
+        streak: data.streak || 3,
+        rank: data.rank || "Novice",
+        badges: Array.isArray(data.badges) ? data.badges : [],
         interests: Array.isArray(data.interests) ? data.interests : [],
+        personality_signals: Array.isArray(data.personality_signals) ? data.personality_signals : [],
+        achievements: Array.isArray(data.achievements) ? data.achievements : [],
       };
     });
   },
@@ -130,14 +162,20 @@ export const db = {
     return withRetry(async () => {
       const dbData = {
         id: userId,
-        name: updates.name ?? "",
+        email: updates.email ?? null,
+        name: updates.name ?? "Student",
         grade: updates.grade ?? null,
         suggested_path: updates.suggested_path ?? null,
         career_pressure: updates.career_pressure ?? null,
         onboarding_completed: updates.onboarding_completed ?? false,
         xp: updates.xp ?? 0,
-        achievements: updates.achievements ?? [],
+        level: updates.level ?? 1,
+        streak: updates.streak ?? 3,
+        rank: updates.rank ?? "Novice",
+        badges: updates.badges ?? [],
         interests: updates.interests ?? [],
+        personality_signals: updates.personality_signals ?? [],
+        achievements: updates.achievements ?? [],
         updated_at: new Date().toISOString(),
       };
 
@@ -148,20 +186,26 @@ export const db = {
         .single();
 
       if (error) {
-        console.error("Error creating/updating profile in Supabase:", error.message);
+        console.error("Error creating profile in Supabase:", formatSupabaseError(error));
         throw error;
       }
 
       return {
         id: data.id,
+        email: data.email,
         name: data.name,
         grade: data.grade,
         suggested_path: data.suggested_path,
         career_pressure: data.career_pressure,
         onboarding_completed: data.onboarding_completed,
         xp: data.xp,
-        achievements: data.achievements || [],
+        level: data.level,
+        streak: data.streak,
+        rank: data.rank,
+        badges: data.badges || [],
         interests: data.interests || [],
+        personality_signals: data.personality_signals || [],
+        achievements: data.achievements || [],
       };
     });
   },
@@ -169,18 +213,25 @@ export const db = {
   async updateProfile(userId: string, updates: Partial<DbProfile>): Promise<DbProfile | null> {
     if (!isSupabaseConfigured) return null;
     return withRetry(async () => {
-      // Convert fields to snake_case for DB
       const dbUpdates: Record<string, any> = {
         updated_at: new Date().toISOString(),
       };
+      if (updates.email !== undefined) dbUpdates.email = updates.email;
       if (updates.name !== undefined) dbUpdates.name = updates.name;
       if (updates.grade !== undefined) dbUpdates.grade = updates.grade;
-      if (updates.suggested_path !== undefined) dbUpdates.suggested_path = updates.suggested_path;
-      if (updates.career_pressure !== undefined) dbUpdates.career_pressure = updates.career_pressure;
+      if (updates.suggested_path !== undefined) {
+        dbUpdates.suggested_path = updates.suggested_path;
+        dbUpdates.career_pressure = updates.suggested_path;
+      }
       if (updates.onboarding_completed !== undefined) dbUpdates.onboarding_completed = updates.onboarding_completed;
       if (updates.xp !== undefined) dbUpdates.xp = updates.xp;
-      if (updates.achievements !== undefined) dbUpdates.achievements = updates.achievements;
+      if (updates.level !== undefined) dbUpdates.level = updates.level;
+      if (updates.streak !== undefined) dbUpdates.streak = updates.streak;
+      if (updates.rank !== undefined) dbUpdates.rank = updates.rank;
+      if (updates.badges !== undefined) dbUpdates.badges = updates.badges;
       if (updates.interests !== undefined) dbUpdates.interests = updates.interests;
+      if (updates.personality_signals !== undefined) dbUpdates.personality_signals = updates.personality_signals;
+      if (updates.achievements !== undefined) dbUpdates.achievements = updates.achievements;
 
       const { data, error } = await supabase
         .from("profiles")
@@ -190,20 +241,26 @@ export const db = {
         .single();
 
       if (error) {
-        console.error("Error updating profile in Supabase:", error.message);
+        console.error("Error updating profile in Supabase:", formatSupabaseError(error));
         throw error;
       }
 
       return {
         id: data.id,
+        email: data.email,
         name: data.name,
         grade: data.grade,
         suggested_path: data.suggested_path,
         career_pressure: data.career_pressure,
         onboarding_completed: data.onboarding_completed,
         xp: data.xp,
-        achievements: data.achievements || [],
+        level: data.level,
+        streak: data.streak,
+        rank: data.rank,
+        badges: data.badges || [],
         interests: data.interests || [],
+        personality_signals: data.personality_signals || [],
+        achievements: data.achievements || [],
       };
     });
   },
@@ -221,31 +278,54 @@ export const db = {
         .maybeSingle();
 
       if (error) {
-        console.error("Error fetching Career DNA:", error.message);
+        console.error("Error fetching Career DNA:", formatSupabaseError(error));
         throw error;
       }
       if (!data) {
         return await this.upsertCareerDna(userId, {
-          analytical: 0,
-          creativity: 0,
-          collaboration: 0,
-          risk_tolerance: 0,
+          analytical: 50,
+          creativity: 50,
+          collaboration: 50,
+          risk_tolerance: 50,
           archetype: "Explorer",
         });
       }
-      return data;
+      return {
+        user_id: data.user_id,
+        analytical: data.analytical,
+        creativity: data.creativity,
+        collaboration: data.collaboration,
+        risk_tolerance: data.risk_tolerance ?? data.risk ?? 50,
+        risk: data.risk ?? data.risk_tolerance ?? 50,
+        archetype: data.archetype || "Explorer",
+      };
     });
   },
 
   async upsertCareerDna(userId: string, dna: Partial<DbCareerDna>): Promise<DbCareerDna> {
     return withRetry(async () => {
+      const riskVal = dna.risk_tolerance ?? dna.risk ?? 50;
       const dbData = {
         user_id: userId,
-        analytical: dna.analytical ?? 0,
-        creativity: dna.creativity ?? 0,
-        collaboration: dna.collaboration ?? 0,
-        risk_tolerance: dna.risk_tolerance ?? 0,
-        archetype: dna.archetype ?? "Explorer",
+        analytical: dna.analytical ?? 50,
+        creativity: dna.creativity ?? 50,
+        collaboration: dna.collaboration ?? 50,
+        risk: riskVal,
+        risk_tolerance: riskVal,
+        work_style: (dna as any).work_style ?? (dna as any).workStyle ?? "Balanced",
+        learning_style: (dna as any).learning_style ?? (dna as any).learningStyle ?? "Visual",
+        communication_score: (dna as any).communication_score ?? (dna as any).communicationScore ?? 50,
+        communication: (dna as any).communication ?? (dna as any).communicationScore ?? 50,
+        creativity_score: (dna as any).creativity_score ?? (dna as any).creativityScore ?? 50,
+        leadership_score: (dna as any).leadership_score ?? (dna as any).leadershipScore ?? 50,
+        leadership: (dna as any).leadership ?? (dna as any).leadershipScore ?? 50,
+        analytical_score: (dna as any).analytical_score ?? (dna as any).analyticalScore ?? 50,
+        confidence_score: (dna as any).confidence_score ?? (dna as any).confidenceScore ?? 75,
+        confidence: (dna as any).confidence ?? (dna as any).confidenceScore ?? 75,
+        decision_patterns: (dna as any).decision_patterns ?? (dna as any).decisionPatterns ?? [],
+        strength_clusters: (dna as any).strength_clusters ?? (dna as any).strengthClusters ?? [],
+        growth_history: (dna as any).growth_history ?? (dna as any).growthHistory ?? [],
+        updated_at: new Date().toISOString(),
       };
 
       const { data, error } = await supabase
@@ -255,7 +335,7 @@ export const db = {
         .single();
 
       if (error) {
-        console.error("Error upserting Career DNA:", error.message);
+        console.error("Error upserting Career DNA:", formatSupabaseError(error));
         throw error;
       }
       return data;
@@ -263,7 +343,7 @@ export const db = {
   },
 
   /**
-   * Simulations (Resume functionality included)
+   * Simulations
    */
   async getSimulations(userId: string): Promise<DbSimulation[]> {
     if (!isSupabaseConfigured) return [];
@@ -274,10 +354,24 @@ export const db = {
         .eq("user_id", userId);
 
       if (error) {
-        console.error("Error fetching simulations:", error.message);
+        console.error("Error fetching simulations:", formatSupabaseError(error));
         throw error;
       }
-      return data || [];
+      return (data || []).map((sim) => ({
+        id: sim.id,
+        user_id: sim.user_id,
+        career_name: sim.career_name || sim.career_id || "",
+        career_id: sim.career_id || sim.career_name || "",
+        choices: sim.choices || sim.choices_made || {},
+        choices_made: sim.choices_made || sim.choices || {},
+        completion_status: sim.completion_status || (sim.completed ? "completed" : "in_progress"),
+        completed: sim.completed ?? (sim.completion_status === "completed"),
+        ending_unlocked: sim.ending_unlocked,
+        reflection_interest: sim.reflection_interest,
+        reflection_confidence: sim.reflection_confidence,
+        current_step: sim.current_step,
+        updated_at: sim.updated_at,
+      }));
     });
   },
 
@@ -288,24 +382,47 @@ export const db = {
         .from("simulations")
         .select("*")
         .eq("user_id", userId)
-        .eq("career_name", careerName)
+        .or(`career_name.eq.${careerName},career_id.eq.${careerName}`)
         .maybeSingle();
 
       if (error) {
-        console.error("Error fetching simulation:", error.message);
+        console.error("Error fetching simulation:", formatSupabaseError(error));
         throw error;
       }
-      return data;
+      if (!data) return null;
+      return {
+        id: data.id,
+        user_id: data.user_id,
+        career_name: data.career_name || data.career_id || "",
+        career_id: data.career_id || data.career_name || "",
+        choices: data.choices || data.choices_made || {},
+        choices_made: data.choices_made || data.choices || {},
+        completion_status: data.completion_status || (data.completed ? "completed" : "in_progress"),
+        completed: data.completed ?? (data.completion_status === "completed"),
+        ending_unlocked: data.ending_unlocked,
+        reflection_interest: data.reflection_interest,
+        reflection_confidence: data.reflection_confidence,
+        current_step: data.current_step,
+        updated_at: data.updated_at,
+      };
     });
   },
 
   async upsertSimulation(userId: string, sim: Partial<DbSimulation> & { career_name: string }): Promise<DbSimulation> {
     return withRetry(async () => {
+      const careerId = sim.career_id || sim.career_name;
+      const choicesVal = sim.choices ?? sim.choices_made ?? {};
+      const completedVal = sim.completed ?? (sim.completion_status === "completed");
+      const completionStatusVal = sim.completion_status ?? (completedVal ? "completed" : "in_progress");
+
       const dbData = {
         user_id: userId,
+        career_id: careerId,
         career_name: sim.career_name,
-        choices_made: sim.choices_made ?? {},
-        completion_status: sim.completion_status ?? "in_progress",
+        choices: choicesVal,
+        choices_made: choicesVal,
+        completed: completedVal,
+        completion_status: completionStatusVal,
         ending_unlocked: sim.ending_unlocked ?? null,
         reflection_interest: sim.reflection_interest ?? null,
         reflection_confidence: sim.reflection_confidence ?? null,
@@ -315,12 +432,12 @@ export const db = {
 
       const { data, error } = await supabase
         .from("simulations")
-        .upsert(dbData, { onConflict: "user_id,career_name" })
+        .upsert(dbData, { onConflict: "user_id,career_id" })
         .select()
         .single();
 
       if (error) {
-        console.error("Error upserting simulation:", error.message);
+        console.error("Error upserting simulation:", formatSupabaseError(error));
         throw error;
       }
       return data;
@@ -334,33 +451,56 @@ export const db = {
     if (!isSupabaseConfigured) return [];
     return withRetry(async () => {
       const { data, error } = await supabase
-        .from("journal")
+        .from("journal_entries")
         .select("*")
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
 
       if (error) {
-        console.error("Error fetching journal entries:", error.message);
+        console.error("Error fetching journal entries:", formatSupabaseError(error));
         throw error;
       }
-      return data || [];
+      return (data || []).map((j) => ({
+        id: j.id,
+        user_id: j.user_id,
+        reflection_text: j.reflection_text || j.content || "",
+        career_reference: j.career_reference || j.career_id || "",
+        career_id: j.career_id || j.career_reference || "",
+        content: j.content || j.reflection_text || "",
+        excited: j.excited,
+        difficult: j.difficult,
+        surprised: j.surprised,
+        feeling: j.feeling,
+        created_at: j.created_at || j.timestamp,
+        timestamp: j.timestamp || j.created_at,
+      }));
     });
   },
 
   async addJournalEntry(userId: string, reflectionText: string, careerReference: string): Promise<DbJournalEntry> {
     return withRetry(async () => {
+      const payload = {
+        user_id: userId,
+        career_id: careerReference,
+        career_reference: careerReference,
+        reflection_text: reflectionText,
+        content: reflectionText,
+        excited: "",
+        difficult: "",
+        surprised: "",
+        feeling: 3,
+        timestamp: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+      };
+
       const { data, error } = await supabase
-        .from("journal")
-        .insert({
-          user_id: userId,
-          reflection_text: reflectionText,
-          career_reference: careerReference,
-        })
+        .from("journal_entries")
+        .insert(payload)
         .select()
         .single();
 
       if (error) {
-        console.error("Error inserting journal entry:", error.message);
+        console.error("Error inserting journal entry:", formatSupabaseError(error));
         throw error;
       }
       return data;
@@ -379,10 +519,16 @@ export const db = {
         .eq("user_id", userId);
 
       if (error) {
-        console.error("Error fetching bookmarks:", error.message);
+        console.error("Error fetching bookmarks:", formatSupabaseError(error));
         throw error;
       }
-      return data || [];
+      return (data || []).map((b) => ({
+        id: b.id,
+        user_id: b.user_id,
+        career_name: b.career_name || b.career_id || "",
+        career_id: b.career_id || b.career_name || "",
+        created_at: b.created_at,
+      }));
     });
   },
 
@@ -390,12 +536,15 @@ export const db = {
     return withRetry(async () => {
       const { data, error } = await supabase
         .from("bookmarks")
-        .upsert({ user_id: userId, career_name: careerName }, { onConflict: "user_id,career_name" })
+        .upsert(
+          { user_id: userId, career_id: careerName, career_name: careerName },
+          { onConflict: "user_id,career_id" }
+        )
         .select()
         .single();
 
       if (error) {
-        console.error("Error adding bookmark:", error.message);
+        console.error("Error adding bookmark:", formatSupabaseError(error));
         throw error;
       }
       return data;
@@ -408,10 +557,10 @@ export const db = {
         .from("bookmarks")
         .delete()
         .eq("user_id", userId)
-        .eq("career_name", careerName);
+        .or(`career_name.eq.${careerName},career_id.eq.${careerName}`);
 
       if (error) {
-        console.error("Error removing bookmark:", error.message);
+        console.error("Error removing bookmark:", formatSupabaseError(error));
         throw error;
       }
       return true;
@@ -432,7 +581,7 @@ export const db = {
         .maybeSingle();
 
       if (error) {
-        console.error("Error fetching AI mentor memory:", error.message);
+        console.error("Error fetching AI mentor memory:", formatSupabaseError(error));
         throw error;
       }
       return data;
@@ -459,7 +608,7 @@ export const db = {
         .single();
 
       if (error) {
-        console.error("Error upserting AI mentor memory:", error.message);
+        console.error("Error upserting AI mentor memory:", formatSupabaseError(error));
         throw error;
       }
       return data;
@@ -482,41 +631,136 @@ export const db = {
       };
     }
 
-    const results = await Promise.allSettled([
-        this.getProfile(userId),
-        this.getCareerDna(userId),
-        this.getSimulations(userId),
-        this.getJournalEntries(userId),
-        this.getBookmarks(userId),
-    ]);
+    try {
+      const [profile, careerDna, simulations, journalEntries, bookmarks] = await Promise.all([
+        this.getProfile(userId).catch((err) => {
+          console.warn("Profile fetch failed, returning null:", formatSupabaseError(err));
+          return null;
+        }),
+        this.getCareerDna(userId).catch((err) => {
+          console.warn("Career DNA fetch failed, returning null:", formatSupabaseError(err));
+          return null;
+        }),
+        this.getSimulations(userId).catch((err) => {
+          console.warn("Simulations fetch failed, returning empty list:", formatSupabaseError(err));
+          return [];
+        }),
+        this.getJournalEntries(userId).catch((err) => {
+          console.warn("Journal entries fetch failed, returning empty list:", formatSupabaseError(err));
+          return [];
+        }),
+        this.getBookmarks(userId).catch((err) => {
+          console.warn("Bookmarks fetch failed, returning empty list:", formatSupabaseError(err));
+          return [];
+        }),
+      ]);
 
-    const valueOr = <T>(index: number, fallback: T): T => {
-      const result = results[index];
-      if (result.status === "fulfilled") return result.value as T;
-      console.error("Unable to load part of the dashboard:", result.reason);
-      return fallback;
-    };
+      return {
+        profile,
+        careerDna,
+        simulations,
+        journalEntries,
+        bookmarks,
+        xp: profile?.xp ?? 0,
+        achievements: profile?.achievements ?? [],
+      };
+    } catch (e) {
+      console.error("Critical error loading dashboard data:", e);
+      return {
+        profile: null,
+        careerDna: null,
+        simulations: [],
+        journalEntries: [],
+        bookmarks: [],
+        xp: 0,
+        achievements: [],
+      };
+    }
+  },
 
-    const profile = valueOr<DbProfile | null>(0, null);
-    const careerDna = valueOr<DbCareerDna | null>(1, null);
-    const simulations = valueOr<DbSimulation[]>(2, []);
-    const journalEntries = valueOr<DbJournalEntry[]>(3, []);
-    const bookmarks = valueOr<DbBookmark[]>(4, []);
+  /**
+   * Ensure user record rows exist in Supabase
+   */
+  async ensureUserProfile(userId: string, email?: string): Promise<void> {
+    if (!isSupabaseConfigured) return;
+    try {
+      const profile = await this.getProfile(userId).catch(() => null);
+      if (!profile) {
+        await this.createProfile(userId, {
+          email: email || null,
+          name: email ? email.split("@")[0] : "Student",
+          onboarding_completed: false,
+          xp: 0,
+          achievements: [],
+          interests: [],
+        }).catch((err) => console.error("ensureUserProfile profiles error:", formatSupabaseError(err)));
+      } else if (email && !profile.email) {
+        // Update email if missing
+        await this.updateProfile(userId, { email }).catch(() => null);
+      }
 
-    return {
-      profile,
-      careerDna,
-      simulations,
-      journalEntries,
-      bookmarks,
-      xp: profile?.xp ?? 0,
-      achievements: profile?.achievements ?? [],
-    };
+      const dna = await this.getCareerDna(userId).catch(() => null);
+      if (!dna) {
+        await this.upsertCareerDna(userId, {
+          analytical: 50,
+          creativity: 50,
+          collaboration: 50,
+          risk_tolerance: 50,
+          archetype: "Explorer",
+        }).catch((err) => console.error("ensureUserProfile DNA error:", formatSupabaseError(err)));
+      }
+
+      // Ensure quest progress row
+      const { data: questData, error: questGetErr } = await supabase
+        .from("quest_progress")
+        .select("user_id")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (questGetErr) {
+        console.error("ensureUserProfile quest progress get error:", formatSupabaseError(questGetErr));
+      } else if (!questData) {
+        const { error: questInsErr } = await supabase.from("quest_progress").insert({
+          user_id: userId,
+          active: [],
+          completed: [],
+          milestones: [],
+          progress: {},
+          claimed_milestones: [],
+          updated_at: new Date().toISOString(),
+        });
+        if (questInsErr) {
+          console.error("ensureUserProfile quest progress insert error:", formatSupabaseError(questInsErr));
+        }
+      }
+
+      // Ensure skill progress row
+      const { data: skillData, error: skillGetErr } = await supabase
+        .from("skill_progress")
+        .select("user_id")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (skillGetErr) {
+        console.error("ensureUserProfile skill progress get error:", formatSupabaseError(skillGetErr));
+      } else if (!skillData) {
+        const { error: skillInsErr } = await supabase.from("skill_progress").insert({
+          user_id: userId,
+          unlocked_skills: [],
+          claimed_skills: [],
+          updated_at: new Date().toISOString(),
+        });
+        if (skillInsErr) {
+          console.error("ensureUserProfile skill progress insert error:", formatSupabaseError(skillInsErr));
+        }
+      }
+    } catch (e) {
+      console.warn("Failed during ensureUserProfile checks:", e);
+    }
   },
 
   /**
    * Migration Layer: Safe sync from LocalStorage data structure to Supabase DB.
-   * Merges safely, avoiding duplicates using constraints.
    */
   async migrateLocalToSupabase(userId: string, localData: CareerVerseData): Promise<void> {
     if (!isSupabaseConfigured) return;
@@ -538,16 +782,16 @@ export const db = {
 
       // Calculate XP and achievements based on experiences completed
       let initialXp = 0;
-      const achievements: string[] = [];
+      const achievementsList: string[] = [];
 
       // 2. Migrate Science experience to simulations table
       if (localData.science.completed || localData.science.step) {
         initialXp += localData.science.completed ? 100 : 20;
-        if (localData.science.completed) achievements.push("science_pioneer");
+        if (localData.science.completed) achievementsList.push("science_pioneer");
 
         await this.upsertSimulation(userId, {
           career_name: "science",
-          choices_made: {},
+          choices: {},
           completion_status: localData.science.completed ? "completed" : "in_progress",
           ending_unlocked: localData.science.completed ? "Completed Physics Lesson" : null,
           reflection_interest: localData.science.enjoyment,
@@ -568,7 +812,7 @@ export const db = {
       // 3. Migrate SWE Simulation
       if (localData.simulation.completed || localData.simulation.step) {
         initialXp += localData.simulation.completed ? 100 : 20;
-        if (localData.simulation.completed) achievements.push("swe_explorer");
+        if (localData.simulation.completed) achievementsList.push("swe_explorer");
 
         const choices: Record<string, SweSceneChoice | null> = {};
         if (localData.simulation.choices.scene1) choices.scene1 = localData.simulation.choices.scene1;
@@ -577,7 +821,7 @@ export const db = {
 
         await this.upsertSimulation(userId, {
           career_name: "software-engineer",
-          choices_made: choices,
+          choices: choices,
           completion_status: localData.simulation.completed ? "completed" : "in_progress",
           ending_unlocked: localData.simulation.completed ? "Finished SWE Day" : null,
           reflection_interest: localData.simulation.enjoyment,
@@ -595,11 +839,11 @@ export const db = {
       }
 
       // Update XP & Achievements in profile
-      if (initialXp > 0 || achievements.length > 0) {
+      if (initialXp > 0 || achievementsList.length > 0) {
         const currentProfile = await this.getProfile(userId);
         if (currentProfile) {
           const newXp = (currentProfile.xp || 0) + initialXp;
-          const mergedAchievements = Array.from(new Set([...(currentProfile.achievements || []), ...achievements]));
+          const mergedAchievements = Array.from(new Set([...(currentProfile.achievements || []), ...achievementsList]));
           await this.updateProfile(userId, {
             xp: newXp,
             achievements: mergedAchievements,
@@ -617,22 +861,22 @@ export const db = {
 
         // Simple scoring algorithm based on selections
         if (choices.scene1 === "a") collaboration += 2; // Ask for help
-        if (choices.scene1 === "b") { analytical += 1; collaboration -= 1; } // Alone
+        if (choices.scene1 === "b") { analytical += 1; collaboration -= 1; }
         if (choices.scene2 === "a") analytical += 2; // Logs methodically
-        if (choices.scene2 === "b") { riskTolerance += 2; analytical -= 1; } // Ship quick patch
+        if (choices.scene2 === "b") { riskTolerance += 2; analytical -= 1; }
         if (choices.scene3 === "a") { creativity += 2; riskTolerance += 1; } // Polish UI
         if (choices.scene3 === "b") analytical += 1; // Ship functional
 
         await this.upsertCareerDna(userId, {
-          analytical: Math.min(10, analytical),
-          creativity: Math.min(10, creativity),
-          collaboration: Math.min(10, collaboration),
-          risk_tolerance: Math.min(10, riskTolerance),
+          analytical: Math.min(10, analytical) * 10,
+          creativity: Math.min(10, creativity) * 10,
+          collaboration: Math.min(10, collaboration) * 10,
+          risk_tolerance: Math.min(10, riskTolerance) * 10,
           archetype: analytical > collaboration ? "Builder" : collaboration > creativity ? "Team Catalyst" : "Explorer",
         });
       }
 
-      console.log("Localstorage migration completed successfully.");
+      console.log("LocalStorage migration completed successfully.");
     } catch (e) {
       console.error("Migration failed:", e);
     }
@@ -641,18 +885,15 @@ export const db = {
   async resetUserData(userId: string): Promise<void> {
     if (!isSupabaseConfigured) return;
     return withRetry(async () => {
-      // 1. Delete simulations
       await supabase.from("simulations").delete().eq("user_id", userId);
-      // 2. Delete bookmarks
       await supabase.from("bookmarks").delete().eq("user_id", userId);
-      // 3. Delete DNA
       await supabase.from("career_dna").delete().eq("user_id", userId);
-      // 4. Delete journal entries
-      await supabase.from("journal").delete().eq("user_id", userId);
-      // 5. Delete AI memory
+      await supabase.from("journal_entries").delete().eq("user_id", userId);
       await supabase.from("ai_mentor_memory").delete().eq("user_id", userId);
+      await supabase.from("mentor_chats").delete().eq("user_id", userId);
+      await supabase.from("quest_progress").delete().eq("user_id", userId);
+      await supabase.from("skill_progress").delete().eq("user_id", userId);
       
-      // 6. Reset profile to default
       await supabase
         .from("profiles")
         .update({

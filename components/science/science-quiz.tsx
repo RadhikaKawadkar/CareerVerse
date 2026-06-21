@@ -9,25 +9,44 @@ import {
   getGuestProfile,
   saveScienceLessonStep,
   saveScienceQuizScore,
+  getResumePath,
 } from "@/lib/profile-storage";
 
 const questions = [
   {
     id: "q1",
-    prompt: "Physics helps us understand:",
+    prompt: "A car drives 5 km East, then turns and drives 5 km West. What is its final displacement?",
     options: [
-      { id: "nature", label: "Nature", correct: true },
-      { id: "music", label: "Music", correct: false },
-      { id: "cooking", label: "Cooking", correct: false },
+      { id: "10km", label: "10 km", correct: false },
+      { id: "0km", label: "0 km (ended where it started)", correct: true },
+      { id: "5km", label: "5 km West", correct: false },
     ],
   },
   {
     id: "q2",
-    prompt: "Scientists usually:",
+    prompt: "In a perfect vacuum (no air resistance), a heavy bowling ball and a light feather are dropped simultaneously. Which lands first?",
     options: [
-      { id: "guess", label: "Guess randomly", correct: false },
-      { id: "observe", label: "Observe and test", correct: true },
-      { id: "ignore", label: "Ignore evidence", correct: false },
+      { id: "ball", label: "The heavy bowling ball", correct: false },
+      { id: "both", label: "Both land at the exact same time", correct: true },
+      { id: "feather", label: "The light feather", correct: false },
+    ],
+  },
+  {
+    id: "q3",
+    prompt: "A drone accelerates from rest (0 m/s) to a speed of 30 m/s in 6 seconds. What is its acceleration rate?",
+    options: [
+      { id: "5ms", label: "5 m/s²", correct: true },
+      { id: "180ms", label: "180 m/s²", correct: false },
+      { id: "6ms", label: "6 m/s²", correct: false },
+    ],
+  },
+  {
+    id: "q4",
+    prompt: "If a spaceship maintains a constant speed of 100 m/s while flying in a perfect circle in space, is it accelerating?",
+    options: [
+      { id: "no_const", label: "No, because its speed is constant.", correct: false },
+      { id: "yes_dir", label: "Yes, because its direction of motion is constantly changing.", correct: true },
+      { id: "no_straight", label: "No, acceleration only happens when speeding up in a straight line.", correct: false },
     ],
   },
 ];
@@ -45,6 +64,13 @@ export function ScienceQuiz() {
     if (!profile.onboardingCompleted) {
       router.replace("/onboarding/1");
       return;
+    }
+    if (!profile.scienceCompleted) {
+      const allowed = ["quiz", "reflection"];
+      if (!profile.scienceLessonStep || !allowed.includes(profile.scienceLessonStep)) {
+        router.replace(getResumePath("science", profile));
+        return;
+      }
     }
     saveScienceLessonStep("quiz");
   }, [router]);
@@ -88,14 +114,14 @@ export function ScienceQuiz() {
     return (
       <div className="flex flex-col gap-6">
         <div className="rounded-2xl border border-border bg-card p-8 text-center shadow-sm">
-          <p className="text-sm font-medium text-sky-600">Quiz complete</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-sky-600">Quiz complete</p>
           <p className="mt-2 font-[family-name:var(--font-plus-jakarta)] text-4xl font-bold text-foreground">
             {finalScore}/{questions.length}
           </p>
-          <p className="mt-2 text-muted-foreground">
+          <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
             {finalScore === questions.length
-              ? "Great job - you understand the basics of how Physics works."
-              : "That is normal for a first try. The lesson was about experiencing Physics, not passing a test."}
+              ? "Flawless score! You have an outstanding grasp of kinematics, vector displacements, and acceleration dynamics."
+              : `You scored ${finalScore}/${questions.length}. Physics is all about developing the logical intuition to analyze forces and motions over time.`}
           </p>
         </div>
 
@@ -104,7 +130,7 @@ export function ScienceQuiz() {
           className="h-12 w-full bg-sky-500 shadow-md shadow-sky-500/25 hover:bg-sky-600"
           onClick={handleGoToReflection}
         >
-          Continue
+          Continue to Reflection
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>
@@ -114,14 +140,14 @@ export function ScienceQuiz() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between text-sm text-muted-foreground">
-        <span>Quick check</span>
+        <span className="font-semibold text-sky-600">Kinematics Check</span>
         <span>
           Question {currentQuestion + 1} of {questions.length}
         </span>
       </div>
 
       <div>
-        <h1 className="font-[family-name:var(--font-plus-jakarta)] text-xl font-bold sm:text-2xl">
+        <h1 className="font-[family-name:var(--font-plus-jakarta)] text-xl font-bold sm:text-2xl leading-snug">
           {question.prompt}
         </h1>
       </div>

@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import "./local-storage-proxy";
 import {
   DEFAULT_CAREERVERSE_DATA,
   DEFAULT_GUEST_PROFILE,
@@ -12,7 +13,7 @@ import {
   type SweSceneChoice,
   type SweSimulationStep,
 } from "@/types/profile";
-import { db } from "./database";
+import { db, formatSupabaseError } from "./database";
 import { supabase } from "./supabase";
 
 const STORAGE_KEY = "careerverse-data";
@@ -182,7 +183,7 @@ function syncToSupabase(updates: DeepPartial<CareerVerseData>) {
         suggested_path: current.profile.suggestedPath || null,
         career_pressure: current.profile.suggestedPath || null,
         onboarding_completed: hasOnboarding,
-      }).catch((err) => console.error("Sync profile error:", err));
+      }).catch((err) => console.error("Sync profile error:", formatSupabaseError(err)));
     }
 
     // 2. Sync Science Simulation
@@ -190,19 +191,21 @@ function syncToSupabase(updates: DeepPartial<CareerVerseData>) {
       const current = getCareerVerseData();
       db.upsertSimulation(userId, {
         career_name: "science",
+        choices: {},
+        choices_made: {},
         completion_status: current.science.completed ? "completed" : "in_progress",
         current_step: current.science.step || "intro",
         reflection_interest: current.science.enjoyment,
         reflection_confidence: current.science.fit,
         ending_unlocked: current.science.completed ? "Completed Physics Lesson" : null,
-      }).catch((err) => console.error("Sync science error:", err));
+      }).catch((err) => console.error("Sync science error:", formatSupabaseError(err)));
 
       if (updates.science.completed && updates.science.enjoyment !== null) {
         db.addJournalEntry(
           userId,
           `Completed the grade 11 Physics lesson. Rated interest: ${current.science.enjoyment}/5, confidence: ${current.science.fit}/5.`,
           "science"
-        ).catch((err) => console.error("Sync science journal error:", err));
+        ).catch((err) => console.error("Sync science journal error:", formatSupabaseError(err)));
 
         // Add XP & achievements
         db.getProfile(userId).then((prof) => {
@@ -211,7 +214,7 @@ function syncToSupabase(updates: DeepPartial<CareerVerseData>) {
             db.updateProfile(userId, {
               xp: (prof.xp || 0) + 100,
               achievements,
-            }).catch((err) => console.error("Sync science XP error:", err));
+            }).catch((err) => console.error("Sync science XP error:", formatSupabaseError(err)));
           }
         });
       }
@@ -223,20 +226,21 @@ function syncToSupabase(updates: DeepPartial<CareerVerseData>) {
       const choices = current.simulation.choices;
       db.upsertSimulation(userId, {
         career_name: "software-engineer",
+        choices: choices as any,
         choices_made: choices as any,
         completion_status: current.simulation.completed ? "completed" : "in_progress",
         current_step: current.simulation.step || "intro",
         reflection_interest: current.simulation.enjoyment,
         reflection_confidence: current.simulation.fit,
         ending_unlocked: current.simulation.completed ? "Finished SWE Day" : null,
-      }).catch((err) => console.error("Sync swe error:", err));
+      }).catch((err) => console.error("Sync swe error:", formatSupabaseError(err)));
 
       if (updates.simulation.completed && updates.simulation.enjoyment !== null) {
         db.addJournalEntry(
           userId,
           `Completed the Software Engineer simulation. Choices: Standup: ${choices.scene1}, Bug: ${choices.scene2}, Deadline: ${choices.scene3}. Interest: ${current.simulation.enjoyment}/5, confidence: ${current.simulation.fit}/5.`,
           "software-engineer"
-        ).catch((err) => console.error("Sync swe journal error:", err));
+        ).catch((err) => console.error("Sync swe journal error:", formatSupabaseError(err)));
 
         // Add XP & achievements
         db.getProfile(userId).then((prof) => {
@@ -245,7 +249,7 @@ function syncToSupabase(updates: DeepPartial<CareerVerseData>) {
             db.updateProfile(userId, {
               xp: (prof.xp || 0) + 100,
               achievements,
-            }).catch((err) => console.error("Sync swe XP error:", err));
+            }).catch((err) => console.error("Sync swe XP error:", formatSupabaseError(err)));
           }
         });
 
@@ -262,12 +266,12 @@ function syncToSupabase(updates: DeepPartial<CareerVerseData>) {
         if (choices.scene3 === "b") analytical += 1;
 
         db.upsertCareerDna(userId, {
-          analytical: Math.min(10, analytical),
-          creativity: Math.min(10, creativity),
-          collaboration: Math.min(10, collaboration),
-          risk_tolerance: Math.min(10, riskTolerance),
+          analytical: Math.min(10, analytical) * 10,
+          creativity: Math.min(10, creativity) * 10,
+          collaboration: Math.min(10, collaboration) * 10,
+          risk_tolerance: Math.min(10, riskTolerance) * 10,
           archetype: analytical > collaboration ? "Builder" : collaboration > creativity ? "Team Catalyst" : "Explorer",
-        }).catch((err) => console.error("Sync DNA error:", err));
+        }).catch((err) => console.error("Sync DNA error:", formatSupabaseError(err)));
       }
     }
   });
@@ -554,9 +558,9 @@ export async function pullDatabaseToLocal(userId: string): Promise<void> {
         fit: sweSim.reflection_confidence,
         step: sweSim.current_step as any,
         choices: {
-          scene1: (sweSim.choices_made?.scene1 || null) as any,
-          scene2: (sweSim.choices_made?.scene2 || null) as any,
-          scene3: (sweSim.choices_made?.scene3 || null) as any,
+          scene1: (sweSim.choices?.scene1 || sweSim.choices_made?.scene1 || null) as any,
+          scene2: (sweSim.choices?.scene2 || sweSim.choices_made?.scene2 || null) as any,
+          scene3: (sweSim.choices?.scene3 || sweSim.choices_made?.scene3 || null) as any,
         },
       };
     }
@@ -566,5 +570,37 @@ export async function pullDatabaseToLocal(userId: string): Promise<void> {
     }
   } catch (e) {
     console.error("Error pulling database to local cache:", e);
+  }
+}
+
+export function getResumePath(experience: "science" | "swe", profile: GuestProfile): string {
+  if (experience === "science") {
+    if (profile.scienceStatus === "completed") {
+      return "/explore/science/intro";
+    }
+    if (profile.scienceStatus === "in_progress") {
+      const step = profile.scienceLessonStep;
+      if (step === "section-1") return "/explore/science/section-1";
+      if (step === "section-2") return "/explore/science/section-2";
+      if (step === "section-3") return "/explore/science/section-3";
+      if (step === "quiz") return "/explore/science/quiz";
+      if (step === "reflection") return "/explore/science/reflection";
+      return "/explore/science/intro";
+    }
+    return "/explore/science/intro";
+  } else {
+    if (profile.sweStatus === "completed") {
+      return "/explore/software-engineer/intro";
+    }
+    if (profile.sweStatus === "in_progress") {
+      const step = profile.sweSimulationStep;
+      if (step === "scene-1") return "/explore/software-engineer/scene-1";
+      if (step === "scene-2") return "/explore/software-engineer/scene-2";
+      if (step === "scene-3") return "/explore/software-engineer/scene-3";
+      if (step === "debrief") return "/explore/software-engineer/debrief";
+      if (step === "reflection") return "/explore/software-engineer/reflection";
+      return "/explore/software-engineer/intro";
+    }
+    return "/explore/software-engineer/intro";
   }
 }

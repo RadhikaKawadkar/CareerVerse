@@ -261,6 +261,7 @@ export function ExploreHub() {
                   href="/explore/science/intro"
                   icon={FlaskConical}
                   completed={scienceCompleted}
+                  status={profile.scienceStatus}
                   accentClass="bg-gradient-to-r from-sky-400 to-sky-500"
                   iconClass="bg-sky-500/10 text-sky-500"
                   onStart={handleScienceStart}
@@ -290,6 +291,7 @@ export function ExploreHub() {
                   href="/explore/software-engineer/intro"
                   icon={Code2}
                   completed={sweCompleted}
+                  status={profile.sweStatus}
                   accentClass="bg-gradient-to-r from-emerald-400 to-emerald-500"
                   iconClass="bg-emerald-500/10 text-emerald-500"
                   onStart={handleSweStart}

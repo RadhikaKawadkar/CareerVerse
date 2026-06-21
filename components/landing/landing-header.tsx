@@ -36,11 +36,19 @@ export function LandingHeader() {
           </a>
         </nav>
 
-        <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.98 }}>
-          <Button asChild size="sm" className="shadow-md shadow-primary/20">
-            <Link href="/onboarding/1">Start Exploring</Link>
-          </Button>
-        </motion.div>
+        <div className="flex items-center gap-4">
+          <Link
+            href="/login"
+            className="text-xs font-bold text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Sign In
+          </Link>
+          <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.98 }}>
+            <Button asChild size="sm" className="shadow-md shadow-primary/20">
+              <Link href="/onboarding/1">Start Exploring</Link>
+            </Button>
+          </motion.div>
+        </div>
       </div>
     </motion.header>
   );

@@ -17,6 +17,10 @@ export function StepPressureForm() {
 
   useEffect(() => {
     const profile = getGuestProfile();
+    if (profile.onboardingCompleted) {
+      router.replace("/explore");
+      return;
+    }
     if (!profile.firstName.trim()) {
       router.replace("/onboarding/1");
       return;

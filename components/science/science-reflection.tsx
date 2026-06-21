@@ -10,12 +10,13 @@ import {
   completeScienceExperience,
   getGuestProfile,
   saveScienceLessonStep,
+  getResumePath,
 } from "@/lib/profile-storage";
 
 export function ScienceReflection() {
   const router = useRouter();
-  const [interest, setInterest] = useState(3);
-  const [confidence, setConfidence] = useState(3);
+  const [interest, setInterest] = useState<number>(3);
+  const [confidence, setConfidence] = useState<number>(3);
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
@@ -23,6 +24,13 @@ export function ScienceReflection() {
     if (!profile.onboardingCompleted) {
       router.replace("/onboarding/1");
       return;
+    }
+    if (!profile.scienceCompleted) {
+      const allowed = ["reflection"];
+      if (!profile.scienceLessonStep || !allowed.includes(profile.scienceLessonStep)) {
+        router.replace(getResumePath("science", profile));
+        return;
+      }
     }
     saveScienceLessonStep("reflection");
     if (profile.scienceReflection) {

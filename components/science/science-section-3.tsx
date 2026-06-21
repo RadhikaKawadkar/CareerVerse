@@ -7,12 +7,12 @@ import { FeedbackCard } from "@/components/science/feedback-card";
 import { LessonOption } from "@/components/science/lesson-option";
 import { LessonProgressBar } from "@/components/science/lesson-progress-bar";
 import { Button } from "@/components/ui/button";
-import { getGuestProfile, saveScienceLessonStep } from "@/lib/profile-storage";
+import { getGuestProfile, saveScienceLessonStep, getResumePath } from "@/lib/profile-storage";
 
 const options = [
-  { id: "3", label: "3 m/s", correct: false },
-  { id: "5", label: "5 m/s", correct: true },
-  { id: "10", label: "10 m/s", correct: false },
+  { id: "5", label: "5 m/s²", correct: false },
+  { id: "15", label: "15 m/s²", correct: true },
+  { id: "150", label: "150 m/s²", correct: false },
 ];
 
 export function ScienceSection3() {
@@ -25,6 +25,13 @@ export function ScienceSection3() {
     if (!profile.onboardingCompleted) {
       router.replace("/onboarding/1");
       return;
+    }
+    if (!profile.scienceCompleted) {
+      const allowed = ["section-3", "quiz", "reflection"];
+      if (!profile.scienceLessonStep || !allowed.includes(profile.scienceLessonStep)) {
+        router.replace(getResumePath("science", profile));
+        return;
+      }
     }
     saveScienceLessonStep("section-3");
   }, [router]);
@@ -55,13 +62,12 @@ export function ScienceSection3() {
       </div>
 
       <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-5">
-        <p className="text-xs font-semibold uppercase tracking-wider text-sky-600">Scenario</p>
+        <p className="text-xs font-semibold uppercase tracking-wider text-sky-600">SpaceX Launch Scenario</p>
         <p className="mt-2 font-medium leading-relaxed">
-          During a school sports day, a bicycle covers 20 meters in 4 seconds on a straight track.
-          What is its average speed?
+          A Falcon 9 rocket starts from rest on the launchpad ($u = 0$ m/s) and accelerates uniformly upward. After $10$ seconds, it reaches a velocity of $150$ m/s. What is its acceleration?
         </p>
         <p className="mt-3 text-sm text-muted-foreground">
-          Hint: speed = distance divided by time
+          Hint: $a = (v - u) / t$ (acceleration = change in velocity divided by time)
         </p>
       </div>
 
@@ -84,8 +90,8 @@ export function ScienceSection3() {
           title={isCorrect ? "You got it!" : "Let's walk through it"}
           message={
             isCorrect
-              ? "Speed = 20 m divided by 4 s = 5 m/s. This is typical Physics work: take a real situation, choose the right relationship, and check whether the answer makes sense."
-              : "Divide distance by time: 20 divided by 4 = 5 m/s. The useful skill is learning the steps and checking your thinking, not guessing instantly."
+              ? "Spot on! Acceleration = (150 m/s - 0 m/s) / 10 s = 15 m/s². In Physics, we take real physical systems, apply motion equations, and solve for unknowns to predict future states."
+              : "Let's review the formula: Acceleration is the rate of change of velocity. (150 m/s - 0 m/s) divided by 10 seconds equals 15 m/s². Understanding coordinate rates is the key skill."
           }
           variant={isCorrect ? "success" : "learn"}
         />

@@ -11,9 +11,9 @@ import { Button } from "@/components/ui/button";
 import { getGuestProfile, saveScienceLessonStep } from "@/lib/profile-storage";
 
 const examples = [
-  { icon: Orbit, text: "Predicting how a cricket ball curves after it is hit" },
-  { icon: Car, text: "Understanding why seatbelts protect you during sudden stops" },
-  { icon: Globe, text: "Explaining why satellites can keep circling Earth" },
+  { icon: Orbit, text: "Distance is the total ground covered (e.g. odometer reading)." },
+  { icon: Car, text: "Displacement is the straight-line shortcut from start to end with direction." },
+  { icon: Globe, text: "Why self-driving cars calculate displacement to optimize GPS route planning." },
 ];
 
 export function ScienceSection1() {
@@ -39,26 +39,27 @@ export function ScienceSection1() {
 
       <MotionFadeIn>
         <div>
-          <p className="text-sm font-semibold text-sky-600">Science · Physics</p>
-          <h1 className="cv-heading mt-1 text-2xl sm:text-3xl">What Physics Really Is</h1>
+          <p className="text-sm font-semibold text-sky-600">Science · Physics Lesson</p>
+          <h1 className="cv-heading mt-1 text-2xl sm:text-3xl">Kinematics: Describing Motion</h1>
         </div>
       </MotionFadeIn>
 
       <MotionFadeIn delay={0.06}>
-        <div className="cv-card-elevated p-6">
+        <div className="cv-card-elevated p-6 space-y-4">
           <p className="text-base leading-relaxed text-foreground">
-            Physics is the habit of noticing a real event, asking why it happened, and testing
-            whether your explanation holds up.
+            Physics starts by mathematically defining how things move. In Grade 11, you learn to distinguish between what looks similar but is fundamentally different.
           </p>
-          <p className="mt-3 text-base leading-relaxed text-muted-foreground">
-            Formulas matter, but they come after the idea. First you learn to see patterns in
-            motion, force, energy, and measurement.
+          <div className="border-l-4 border-sky-500 pl-4 py-1 bg-sky-500/5 rounded-r-xl">
+            <span className="font-bold text-sky-700">Distance vs Displacement:</span> If you run 400 meters around a circular track and land exactly where you started, your <span className="font-semibold text-foreground">Distance</span> covered is 400m, but your <span className="font-semibold text-foreground">Displacement</span> is <span className="font-semibold text-sky-600">0 meters</span> because you didn&apos;t end up away from your origin!
+          </div>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            Formulas are just tools to express these relationships. The core skill is visualizing the physical system before writing equations.
           </p>
         </div>
       </MotionFadeIn>
 
       <div>
-        <p className="mb-4 text-sm font-semibold text-muted-foreground">Examples of what you explore:</p>
+        <p className="mb-4 text-sm font-semibold text-muted-foreground">Core concepts to visualize:</p>
         <MotionStagger className="space-y-3">
           {examples.map((example) => (
             <MotionStaggerItem key={example.text}>
@@ -79,8 +80,8 @@ export function ScienceSection1() {
       <CareerFactCard
         accent="sky"
         facts={[
-          "Physics is used in sports analytics, climate models, transport safety, and space missions.",
-          "A strong science path rewards curiosity and steady practice more than instant genius.",
+          "Kinematics powers GPS navigation, robotic arms, aerospace trajectories, and gaming graphics engines.",
+          "A career in physics reward precision: understanding coordinate systems is the first step.",
         ]}
       />
 

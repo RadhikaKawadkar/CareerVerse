@@ -8,7 +8,7 @@ import { LessonOption } from "@/components/science/lesson-option";
 import { LessonProgressBar } from "@/components/science/lesson-progress-bar";
 import { CareerFactCard } from "@/components/shared/career-fact-card";
 import { Button } from "@/components/ui/button";
-import { getGuestProfile, saveScienceLessonStep } from "@/lib/profile-storage";
+import { getGuestProfile, saveScienceLessonStep, getResumePath } from "@/lib/profile-storage";
 
 const options = [
   { id: "ball", label: "Ball falls faster", correct: false },
@@ -26,6 +26,13 @@ export function ScienceSection2() {
     if (!profile.onboardingCompleted) {
       router.replace("/onboarding/1");
       return;
+    }
+    if (!profile.scienceCompleted) {
+      const allowed = ["section-2", "section-3", "quiz", "reflection"];
+      if (!profile.scienceLessonStep || !allowed.includes(profile.scienceLessonStep)) {
+        router.replace(getResumePath("science", profile));
+        return;
+      }
     }
     saveScienceLessonStep("section-2");
   }, [router]);
