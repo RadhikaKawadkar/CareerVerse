@@ -103,15 +103,14 @@ export const db = {
         .from("profiles")
         .select("*")
         .eq("id", userId)
-        .single();
+        .maybeSingle();
 
       if (error) {
-        if (error.code === "PGRST116") {
-          // Record not found, create one
-          return await this.createProfile(userId, { name: "" });
-        }
         console.error("Error fetching profile from Supabase:", error.message);
         throw error;
+      }
+      if (!data) {
+        return await this.createProfile(userId, { name: "" });
       }
       return {
         id: data.id,
@@ -219,20 +218,20 @@ export const db = {
         .from("career_dna")
         .select("*")
         .eq("user_id", userId)
-        .single();
+        .maybeSingle();
 
       if (error) {
-        if (error.code === "PGRST116") {
-          return await this.upsertCareerDna(userId, {
-            analytical: 0,
-            creativity: 0,
-            collaboration: 0,
-            risk_tolerance: 0,
-            archetype: "Explorer",
-          });
-        }
         console.error("Error fetching Career DNA:", error.message);
         throw error;
+      }
+      if (!data) {
+        return await this.upsertCareerDna(userId, {
+          analytical: 0,
+          creativity: 0,
+          collaboration: 0,
+          risk_tolerance: 0,
+          archetype: "Explorer",
+        });
       }
       return data;
     });
@@ -247,7 +246,6 @@ export const db = {
         collaboration: dna.collaboration ?? 0,
         risk_tolerance: dna.risk_tolerance ?? 0,
         archetype: dna.archetype ?? "Explorer",
-        updated_at: new Date().toISOString(),
       };
 
       const { data, error } = await supabase
@@ -484,28 +482,36 @@ export const db = {
       };
     }
 
-    try {
-      const [profile, careerDna, simulations, journalEntries, bookmarks] = await Promise.all([
+    const results = await Promise.allSettled([
         this.getProfile(userId),
         this.getCareerDna(userId),
         this.getSimulations(userId),
         this.getJournalEntries(userId),
         this.getBookmarks(userId),
-      ]);
+    ]);
 
-      return {
-        profile,
-        careerDna,
-        simulations,
-        journalEntries,
-        bookmarks,
-        xp: profile?.xp ?? 0,
-        achievements: profile?.achievements ?? [],
-      };
-    } catch (e) {
-      console.error("Failed to load dashboard data:", e);
-      throw e;
-    }
+    const valueOr = <T>(index: number, fallback: T): T => {
+      const result = results[index];
+      if (result.status === "fulfilled") return result.value as T;
+      console.error("Unable to load part of the dashboard:", result.reason);
+      return fallback;
+    };
+
+    const profile = valueOr<DbProfile | null>(0, null);
+    const careerDna = valueOr<DbCareerDna | null>(1, null);
+    const simulations = valueOr<DbSimulation[]>(2, []);
+    const journalEntries = valueOr<DbJournalEntry[]>(3, []);
+    const bookmarks = valueOr<DbBookmark[]>(4, []);
+
+    return {
+      profile,
+      careerDna,
+      simulations,
+      journalEntries,
+      bookmarks,
+      xp: profile?.xp ?? 0,
+      achievements: profile?.achievements ?? [],
+    };
   },
 
   /**
