@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { generateGrokResponse } from "@/lib/grok-service";
 
 export const runtime = "edge";
 
@@ -8,30 +9,22 @@ type ChatHistoryItem = {
   content?: string;
 };
 
-type GeminiResponse = {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{
-        text?: string;
-      }>;
-    };
-  }>;
-  error?: {
-    message?: string;
-  };
-};
-
 function cleanStringList(value: unknown): string {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string").slice(0, 10).join(", ")
     : "";
 }
 
-function extractGeminiText(data: GeminiResponse): string {
-  return (data.candidates?.[0]?.content?.parts || [])
-    .map((part) => part.text || "")
-    .join("")
-    .trim();
+function getUsefulFallback(message: string, profile: { name?: string }): string {
+  const lower = message.toLowerCase();
+  const name = typeof profile?.name === "string" ? profile.name : "there";
+  if (lower.includes("parent") || lower.includes("parents") || lower.includes("engineering") || lower.includes("lawyer") || lower.includes("law")) {
+    return `Hi ${name}, a practical way to handle this is to separate emotion from evidence. Tell your parents you respect why engineering feels safe, then show them a structured lawyer pathway: CLAT/LSAT options, BA LLB colleges, internships, courtroom/corporate law roles, and salary ranges. Ask for a time-boxed agreement: you prepare seriously for law entrance while keeping one backup academic option open. That makes your choice look responsible, not impulsive.`;
+  }
+  if (lower.includes("career") || lower.includes("confused") || lower.includes("choose")) {
+    return `Start with three filters: what work you can do repeatedly, what subjects you can tolerate when they get hard, and what lifestyle you want. Then test two careers through simulations or short projects before deciding. A good next step is to compare one safe option with one exciting option using education path, cost, salary, daily work, and growth.`;
+  }
+  return `Here is a useful way to think about it: define the decision, list your top two options, compare the education path and daily work, then choose one small experiment this week. If you share the exact career choice or pressure you are facing, I can help you frame a clearer next step.`;
 }
 
 export async function POST(req: Request) {
@@ -46,111 +39,62 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Please enter a message." }, { status: 400 });
     }
 
-    const apiKey =
-      process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-
+    const apiKey = process.env.XAI_API_KEY;
     if (!apiKey) {
-      return NextResponse.json(
-        { error: "Gemini API key not configured. Add GEMINI_API_KEY to .env.local." },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "XAI_API_KEY missing" }, { status: 400 });
     }
 
-    const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
     const mentorName = typeof mentor.name === "string" ? mentor.name : "AI Career Coach";
-    const mentorDescription =
-      typeof mentor.description === "string" ? mentor.description : "general career guidance";
+    const mentorDescription = typeof mentor.description === "string" ? mentor.description : "general career guidance";
 
     const systemInstruction = `
-You are ${mentorName}, a supportive CareerVerse mentor specializing in ${mentorDescription}.
-You are helping a high-school student explore careers and education.
-
-Student context:
-- Name: ${typeof profile.name === "string" ? profile.name : "Student"}
-- Grade: ${profile.grade || 10}
-- Interests: ${cleanStringList(profile.interests) || "Not provided"}
-- Favorite careers: ${cleanStringList(profile.favoriteCareers) || "Not provided"}
-- Completed simulations: ${cleanStringList(profile.completedSimulations) || "None"}
-
-Answer the student's actual question directly using your general knowledge. Be warm, clear, practical,
-and concise (normally under 220 words), but give enough detail to be useful. Ask at most one relevant
-follow-up question. Do not pretend to know personal facts that were not provided. For medical, legal,
-financial, or other high-stakes questions, provide general educational information and recommend
-checking with a qualified adult or professional when appropriate.
+      You are CareerVerse AI Mentor (named ${mentorName}), specializing in ${mentorDescription}.
+      Give practical career guidance.
+      Reference user interests and goals.
+      No generic responses.
+      
+      Student context:
+      - Name: ${typeof profile.name === "string" ? profile.name : "Student"}
+      - Grade: ${profile.grade || 10}
+      - Interests: ${cleanStringList(profile.interests) || "Not provided"}
+      - Favorite careers: ${cleanStringList(profile.favoriteCareers) || "Not provided"}
+      - Completed simulations: ${cleanStringList(profile.completedSimulations) || "None"}
+      - Career DNA: ${profile.dna ? JSON.stringify(profile.dna) : "Not available"}
     `.trim();
 
-    const contents = history
-      .slice(-20)
+    const historyText = history
+      .slice(-16)
       .map((item) => {
-        const text =
-          typeof item.content === "string"
-            ? item.content
-            : typeof item.text === "string"
-              ? item.text
-              : "";
-
-        return {
-          role: item.role === "assistant" || item.role === "model" ? "model" : "user",
-          parts: [{ text }],
-        };
+        const text = typeof item.content === "string" ? item.content : typeof item.text === "string" ? item.text : "";
+        return `${item.role === "assistant" || item.role === "model" ? "Coach" : "Student"}: ${text}`;
       })
-      .filter((item) => item.parts[0].text.trim().length > 0);
+      .join("\n");
 
-    const lastContent = contents[contents.length - 1];
-    if (
-      !lastContent ||
-      lastContent.role !== "user" ||
-      lastContent.parts[0].text !== message
-    ) {
-      contents.push({
-        role: "user",
-        parts: [{ text: message }],
-      });
-    }
+    const finalPrompt = `
+      ${systemInstruction}
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify({
-          system_instruction: {
-            parts: [{ text: systemInstruction }],
-          },
-          contents,
-          generationConfig: {
-            maxOutputTokens: 700,
-          },
-        }),
+      Conversation History:
+      ${historyText}
+      Student: ${message}
+
+      Coach Response:
+    `.trim();
+
+    try {
+      const reply = await generateGrokResponse(finalPrompt);
+      if (!reply.trim()) {
+        const fallbackReply = getUsefulFallback(message, profile);
+        return NextResponse.json({ reply: fallbackReply, source: "local" }, { status: 200 });
       }
-    );
 
-    const data = (await response.json().catch(() => ({}))) as GeminiResponse;
-
-    if (!response.ok) {
-      const providerMessage =
-        data.error?.message || `Gemini request failed with status ${response.status}.`;
-      console.error("Gemini API error:", providerMessage);
-      return NextResponse.json({ error: providerMessage }, { status: response.status });
+      return NextResponse.json({ reply: reply.trim(), source: "grok" }, { status: 200 });
+    } catch (err) {
+      console.error("Exception in Grok direct coaching call:", err);
+      const fallbackReply = getUsefulFallback(message, profile);
+      return NextResponse.json({ reply: fallbackReply, source: "local" }, { status: 200 });
     }
-
-    const text = extractGeminiText(data);
-    if (!text) {
-      return NextResponse.json(
-        { error: "Gemini returned an empty response. Please try again." },
-        { status: 502 }
-      );
-    }
-
-    return NextResponse.json({ text });
-  } catch (error) {
-    console.error("Gemini coaching route error:", error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Internal server error" },
-      { status: 500 }
-    );
+  } catch (err) {
+    console.error("Coaching request parse error:", err);
+    return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
   }
 }

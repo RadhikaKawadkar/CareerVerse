@@ -135,7 +135,7 @@ export default function AiMentorPage() {
 
       const assistantMessage: Message = {
         role: "assistant",
-        content: data.text,
+        content: data.reply || data.text,
         timestamp: new Date().toISOString(),
       };
 
@@ -272,3 +272,4 @@ export default function AiMentorPage() {
     </div>
   );
 }
+

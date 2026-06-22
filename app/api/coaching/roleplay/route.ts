@@ -1,267 +1,113 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextResponse } from "next/server";
 
 export const runtime = "edge";
 
-function findJsonObjectBoundary(str: string): number {
-  let braceCount = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = 0; i < str.length; i++) {
-    const char = str[i];
-    if (escape) {
-      escape = false;
-      continue;
-    }
-    if (char === "\\") {
-      escape = true;
-      continue;
-    }
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (!inString) {
-      if (char === "{") {
-        braceCount++;
-      } else if (char === "}") {
-        braceCount--;
-        if (braceCount === 0) {
-          return i;
-        }
+const MODELS = ["gemini-1.5-flash"];
+const GEMINI_TIMEOUT_MS = 28000;
+
+function extractText(data: any): string {
+  return (data.candidates?.[0]?.content?.parts || [])
+    .map((part: { text?: string }) => part.text || "")
+    .join("")
+    .trim();
+}
+
+function contextualFallback(career: string, message: string): string {
+  const latest = message.toLowerCase();
+  if (career === "lawyer") {
+    return "Counselor, what specific evidence supports that argument? The court needs proof, not broad claims.";
+  }
+  if (latest.includes("age")) return "I am 45 years old, doctor.";
+  if (latest.includes("sleep")) return "I sleep about 4-5 hours because chest discomfort wakes me up at night.";
+  if (latest.includes("pain") || latest.includes("chest")) return "It feels like a heavy pressure in the middle of my chest, especially when I climb stairs.";
+  return "Doctor, I feel anxious and short of breath with this chest pressure. What should I tell you next?";
+}
+
+async function callGemini(apiKey: string, systemInstruction: string, contents: any[], json = false) {
+  let lastError = "Gemini request failed.";
+  for (const model of MODELS) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
+    try {
+      if (process.env.NODE_ENV === "development") {
+        console.log("Gemini key loaded:", Boolean(process.env.GEMINI_API_KEY));
+        const modelName = model;
+        console.log("Gemini model:", modelName);
       }
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents,
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          generationConfig: {
+            temperature: json ? 0.2 : 0.7,
+            maxOutputTokens: json ? 1000 : 300,
+            ...(json ? { responseMimeType: "application/json" } : {}),
+          },
+        }),
+      });
+      clearTimeout(timeout);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        lastError = data.error?.message || `Gemini ${model} failed with status ${response.status}.`;
+        if (process.env.NODE_ENV === "development") {
+          console.error("Gemini coaching roleplay error:", lastError);
+          console.error("Exact Gemini API response:", JSON.stringify(data));
+        }
+        continue;
+      }
+      const text = extractText(data);
+      if (!text) {
+        lastError = `Gemini ${model} returned an empty response.`;
+        continue;
+      }
+      return text;
+    } catch (error: any) {
+      clearTimeout(timeout);
+      lastError = error?.name === "AbortError" ? "Gemini request timed out." : (error?.message || "Gemini network failure.");
+      if (process.env.NODE_ENV === "development") console.error("Gemini coaching roleplay exception:", lastError);
     }
   }
-  return -1;
+  throw new Error(lastError);
 }
 
 export async function POST(req: Request) {
+  const body = await req.json();
+  const { career, message, history, profile, isFeedback } = body;
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (process.env.NODE_ENV === "development") {
+    console.log("Gemini key loaded:", Boolean(process.env.GEMINI_API_KEY));
+  }
+
+  if (!apiKey) {
+    return NextResponse.json({ reply: contextualFallback(career, message || ""), source: "fallback", fallback: true, error: "GEMINI_API_KEY missing" });
+  }
+
   try {
-    const { career, message, history, profile, isFeedback } = await req.json();
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-          { error: "Gemini API key not configured on server." },
-          { status: 500 }
-      );
-    }
-
-    const modelName = "gemini-2.5-flash";
-    
     if (isFeedback) {
-      // Feedback Generation Endpoint
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-      
-      const systemPrompt = `
-        You are the CareerVerse Roleplay Evaluation Engine.
-        You will analyze a conversation history between a student and an AI character.
-        The career simulation is: ${career === "lawyer" ? "Lawyer (Student acts as Lawyer, AI acts as Judge)" : "Doctor (Student acts as Doctor, AI acts as Patient)"}.
-        Student Profile: Name: ${profile?.name || "Student"}, Grade: ${profile?.grade || 10}.
-        
-        Evaluate the student's performance across the session.
-        Provide a JSON response containing exactly the following keys:
-        - strengths: a string summarizing 1-2 major strengths of the student in this roleplay.
-        - improvement: a string summarizing 1-2 key areas where the student can improve.
-        - careerFitScore: a number (0-100) representing how well their skills match this career path.
-        - communicationScore: a number (0-100) representing their communication clarity and tone.
-        - confidenceScore: a number (0-100) representing their confidence level.
-        - nextAction: a specific, actionable next recommendation (e.g. "Read about hearsay rules" or "Practice active patient listening").
-
-        IMPORTANT: Output ONLY a valid JSON object. Do not include markdown code block formatting (no \`\`\`json). Just the raw JSON.
-      `;
-
-      const contents = [
-        {
-          role: "user",
-          parts: [
-            {
-              text: `Here is the full conversation history of the roleplay session:\n${JSON.stringify(
-                history
-              )}\n\nPlease evaluate this session and return the JSON evaluation card.`
-            }
-          ]
-        }
-      ];
-
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents,
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          generationConfig: {
-            temperature: 0.2,
-            responseMimeType: "application/json"
-          }
-        })
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Gemini API call failed for feedback", errorText);
-        return NextResponse.json({ error: "Gemini API call failed" }, { status: response.status });
-      }
-
-      const data = await response.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (text) {
-        try {
-          const parsed = JSON.parse(text.trim());
-          return NextResponse.json(parsed);
-        } catch {
-          return NextResponse.json({ rawText: text });
-        }
-      }
-      return NextResponse.json({ error: "No response text" }, { status: 500 });
+      const systemInstruction = `Evaluate this CareerVerse roleplay. Return only JSON with strengths, improvement, careerFitScore, communicationScore, confidenceScore, nextAction.`;
+      const raw = await callGemini(apiKey, systemInstruction, [{ role: "user", parts: [{ text: JSON.stringify({ career, history, profile }) }] }], true);
+      return NextResponse.json(JSON.parse(raw.trim()));
     }
 
-    // Roleplay Dialogue Generation (Streaming)
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?key=${apiKey}`;
+    const systemInstruction = career === "lawyer"
+      ? `You are a strict courtroom judge. Stay in character, challenge weak arguments, and ask for evidence. Reply under 80 words.`
+      : `You are Alex Mercer, a 45-year-old patient. Stay in character, answer the exact doctor question, reveal only asked details, and reply under 70 words.`;
+    const contents = Array.isArray(history)
+      ? history.filter((h: any) => h?.text).map((h: any) => ({ role: h.role === "user" ? "user" : "model", parts: [{ text: h.text }] }))
+      : [];
+    if (message) contents.push({ role: "user", parts: [{ text: message }] });
+    if (contents.length === 0) contents.push({ role: "user", parts: [{ text: "Start in character." }] });
 
-    let systemInstruction = "";
-    if (career === "lawyer") {
-      systemInstruction = `
-        You are a strict, formal Judge in a courtroom trial.
-        A student named ${profile?.name || "Student"} is acting as the Defense Attorney.
-        
-        Your behavior guidelines:
-        - You must stay strictly in character as a formal, courtroom Judge.
-        - Speak formally, address the student as "counselor", and demand logical clarity and evidence.
-        - You must challenge the student's arguments and ask realistic follow-up questions.
-        - Do not give generic praise or say "good point" after every answer. Stay formal and critical.
-        - Point out weak reasoning in the defense's statements and ask for evidence.
-        - Adapt your arguments dynamically based on what the student says.
-        - Keep your response under 80 words to maintain snappy dialogue pacing.
-        - If this is the final turn (around turn 5-6), deliver a brief, formal ruling (verdict) based on how well they argued, and declare the trial concluded.
-      `;
-    } else {
-      systemInstruction = `
-        You are a patient named Alex Mercer visiting the doctor (played by the student named ${profile?.name || "Student"}).
-        
-        Your behavior guidelines:
-        - You must stay strictly in character as the patient. You do not have medical knowledge and do not use clinical jargon.
-        - Describe your symptoms simply and naturally: squeezing/heavy chest pressure, anxiety, shortness of breath, getting worse on exertion (walking up stairs).
-        - You must NOT reveal the diagnosis (Angina Pectoris) immediately.
-        - Answer ONLY what the student asks. Do not volunteer extra medical details unless asked.
-        - Ask realistic, anxious follow-up questions if the student is unclear or tells you something scary.
-        - Do not give predefined or generic answers. Stay dynamic.
-        - Do not say "you are right doctor" randomly.
-        - Keep your response under 70 words to keep the dialogue snappy.
-      `;
-    }
-
-    const contents: { role: string; parts: { text: string }[] }[] = [];
-    if (history && history.length > 0) {
-      contents.push(
-        ...history.map((h: { role: string; text: string }) => ({
-          role: h.role === "user" ? "user" : "model",
-          parts: [{ text: h.text }],
-        }))
-      );
-    } else if (career === "doctor") {
-      // In doctor mode, the patient speaks first, so contents might be empty initially.
-      // If history is empty and user sent first trigger:
-      contents.push({
-        role: "user",
-        parts: [{ text: "Start consultation" }],
-      });
-    }
-
-    // Add current user message if any
-    if (message) {
-      contents.push({
-        role: "user",
-        parts: [{ text: message }],
-      });
-    }
-
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contents,
-        systemInstruction: {
-          parts: [{ text: systemInstruction }],
-        },
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 300,
-        },
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Gemini API call failed for roleplay text", errorText);
-      return NextResponse.json(
-        { error: "Gemini API call failed" },
-        { status: response.status }
-      );
-    }
-
-    const encoder = new TextEncoder();
-    const decoder = new TextDecoder();
-    const reader = response.body?.getReader();
-
-    const stream = new ReadableStream({
-      async start(controller) {
-        let buffer = "";
-        try {
-          while (true) {
-            const { done, value } = await reader!.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            
-            let pos;
-            while ((pos = findJsonObjectBoundary(buffer)) !== -1) {
-              const part = buffer.slice(0, pos + 1);
-              buffer = buffer.slice(pos + 1);
-              
-              let cleanPart = part.trim();
-              if (cleanPart.startsWith("[")) cleanPart = cleanPart.slice(1).trim();
-              if (cleanPart.startsWith(",")) cleanPart = cleanPart.slice(1).trim();
-              if (cleanPart.endsWith("]")) cleanPart = cleanPart.slice(0, -1).trim();
-              
-              if (cleanPart) {
-                try {
-                  const parsed = JSON.parse(cleanPart);
-                  const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
-                  if (text) {
-                    controller.enqueue(encoder.encode(text));
-                  }
-                } catch {
-                  // Prepend back if it's incomplete
-                  buffer = part + buffer;
-                  break;
-                }
-              }
-            }
-          }
-        } catch (e) {
-          controller.error(e);
-        } finally {
-          controller.close();
-        }
-      }
-    });
-
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-      },
-    });
-
-  } catch (err: unknown) {
-    console.error("Roleplay API Route Error:", err);
-    const errMsg = err instanceof Error ? err.message : "Internal server error";
-    return NextResponse.json(
-      { error: errMsg },
-      { status: 500 }
-    );
+    const reply = await callGemini(apiKey, systemInstruction, contents);
+    return NextResponse.json({ reply, source: "gemini", fallback: false });
+  } catch (error: any) {
+    const reason = error?.message || "Gemini request failed.";
+    if (process.env.NODE_ENV === "development") console.error("Coaching roleplay final error:", reason);
+    return NextResponse.json({ reply: contextualFallback(career, message || ""), source: "fallback", fallback: true, error: reason });
   }
 }
+

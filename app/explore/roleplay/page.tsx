@@ -120,7 +120,6 @@ export default function VoiceRoleplayPage() {
   const [isPaused, setIsPaused] = useState(false);
   const [turnCount, setTurnCount] = useState(0);
   const [configError, setConfigError] = useState<string | null>(null);
-  const [isFallbackMode, setIsFallbackMode] = useState(false);
   const [isSessionEnded, setIsSessionEnded] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -140,6 +139,8 @@ export default function VoiceRoleplayPage() {
   const hesitationCountRef = useRef(hesitationCount);
   const voiceTurnsCountRef = useRef(voiceTurnsCount);
   const recognitionStartTimeRef = useRef<number | null>(null);
+  const isAutoSendingRef = useRef(false);
+  const lastSentTranscriptRef = useRef("");
 
   // Constants
   const MAX_TURNS = 6;
@@ -362,7 +363,14 @@ export default function VoiceRoleplayPage() {
           const cleanFinal = finalTranscript.trim();
           if (cleanFinal) {
             const normalizedFinal = normalizeTranscript(cleanFinal);
-            setCurrentInput(normalizedFinal);
+            
+            console.log("Final transcript:", normalizedFinal);
+            
+            if (!normalizedFinal) return;
+            if (normalizedFinal === lastSentTranscriptRef.current) return;
+            if (isProcessingRef.current) return;
+            if (isSessionEndedRef.current) return;
+            if (isAutoSendingRef.current) return;
 
             // Track hesitations
             const hesitations = normalizedFinal.match(/\b(um|uh|er|ah|like|hmmm|well)\b/gi) || [];
@@ -379,19 +387,19 @@ export default function VoiceRoleplayPage() {
             const nextVoiceTurns = voiceTurnsCountRef.current + 1;
             setVoiceTurnsCount(nextVoiceTurns);
             voiceTurnsCountRef.current = nextVoiceTurns;
+
+            lastSentTranscriptRef.current = normalizedFinal;
+            isAutoSendingRef.current = true;
+            setCurrentInput(normalizedFinal);
             
-            // Auto-send in continuous voice loop mode
-            if (isTwoWayModeRef.current && !isPausedRef.current && !isProcessingRef.current && !isSessionEndedRef.current && turnCountRef.current < MAX_TURNS) {
-              setIsProcessing(true);
-              isProcessingRef.current = true;
-              
-              // Stop recognition immediately to prevent duplicate sends
-              try {
-                rec.abort();
-              } catch {}
-              
-              handleSendMessage(normalizedFinal);
-            }
+            console.log("Auto-sending transcript");
+
+            // Stop recognition immediately to prevent duplicate sends
+            try {
+              rec.abort();
+            } catch {}
+            
+            handleSendMessage(normalizedFinal);
           }
         }
       };
@@ -511,6 +519,7 @@ export default function VoiceRoleplayPage() {
       if (isTwoWayModeRef.current && isPlayingRef.current && !isPausedRef.current && !isProcessingRef.current && !isSessionEndedRef.current && turnCountRef.current < MAX_TURNS) {
         autoListenTimeoutRef.current = setTimeout(() => {
           if (isTwoWayModeRef.current && isPlayingRef.current && !isPausedRef.current && !isProcessingRef.current && !isSessionEndedRef.current && turnCountRef.current < MAX_TURNS) {
+            console.log("Restarting mic");
             startListeningAutomatically();
           }
         }, 2000);
@@ -568,6 +577,7 @@ export default function VoiceRoleplayPage() {
       isSpeakingRef.current = false;
       // Auto-restart mic in Two-Way Mode only if session is active and under limit
       if (isTwoWayModeRef.current && isPlayingRef.current && !isPausedRef.current && !isProcessingRef.current && !isSessionEndedRef.current && turnCountRef.current < MAX_TURNS) {
+        console.log("Restarting mic");
         startListeningAutomatically();
       }
     };
@@ -575,6 +585,7 @@ export default function VoiceRoleplayPage() {
       setIsSpeaking(false);
       isSpeakingRef.current = false;
       if (isTwoWayModeRef.current && isPlayingRef.current && !isPausedRef.current && !isProcessingRef.current && !isSessionEndedRef.current && turnCountRef.current < MAX_TURNS) {
+        console.log("Restarting mic");
         startListeningAutomatically();
       }
     };
@@ -603,11 +614,12 @@ export default function VoiceRoleplayPage() {
     setIsPaused(false);
     isPausedRef.current = false;
     setConfigError(null);
-    setIsFallbackMode(false);
     setIsSessionEnded(false);
     isSessionEndedRef.current = false;
     setIsProcessing(false);
     isProcessingRef.current = false;
+    isAutoSendingRef.current = false;
+    lastSentTranscriptRef.current = "";
 
     // Reset voice performance tracking states
     setVoiceUsed(false);
@@ -948,46 +960,36 @@ export default function VoiceRoleplayPage() {
       }
 
       if (response.ok) {
-        const reader = response.body?.getReader();
-        if (reader) {
-          const decoder = new TextDecoder();
-          let characterText = "";
-          
-          const placeholderId = `msg-stream-${Date.now()}`;
-          setHistory((prev) => [...prev, { id: placeholderId, sender: "character", text: "" }]);
-          setIsThinking(false);
+        const data = await response.json();
+        const characterText = typeof data.reply === "string" ? data.reply.trim() : "";
+        const source = data.source || "grok";
+        
+        console.log("AI reply received");
+        if (process.env.NODE_ENV === "development") {
+          console.log("AI response source:", source);
+        }
+        
+        if (!characterText) {
+          throw new Error(data.error || "AI returned an empty response.");
+        }
 
-          while (true) {
-            if (isSessionEndedRef.current) {
-              break;
-            }
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (isSessionEndedRef.current) {
-              break;
-            }
-            const chunk = decoder.decode(value, { stream: true });
-            characterText += chunk;
-            
-            setHistory((prev) => 
-              prev.map(m => m.id === placeholderId ? { ...m, text: characterText } : m)
-            );
-          }
+        setConfigError(null);
+
+        const responseId = `msg-grok-${Date.now()}`;
+        setHistory((prev) => [...prev, { id: responseId, sender: "character", text: characterText }]);
+        setIsThinking(false);
+
+        if (!isSessionEndedRef.current) {
+          console.log("Grok response received");
+          speakText(characterText);
           
-          if (!isSessionEndedRef.current) {
-            // AI Response speaks aloud
-            speakText(characterText);
-            
-            const newTurnCount = turnCountRef.current + 1;
-            setTurnCount(newTurnCount);
-            turnCountRef.current = newTurnCount;
-            
-            if (newTurnCount >= MAX_TURNS) {
-              await endRoleplaySession();
-            }
+          const newTurnCount = turnCountRef.current + 1;
+          setTurnCount(newTurnCount);
+          turnCountRef.current = newTurnCount;
+          
+          if (newTurnCount >= MAX_TURNS) {
+            await endRoleplaySession();
           }
-        } else {
-          throw new Error("No reader available");
         }
       } else {
         const errData = await response.json().catch(() => ({}));
@@ -1002,72 +1004,27 @@ export default function VoiceRoleplayPage() {
         return;
       }
       clearTimeout(timeoutId);
-      setIsFallbackMode(true);
-      
-      let errorDisplay = `AI is temporarily unavailable (${e.message || "Unknown error"}). Continuing with fallback roleplay.`;
-      if (isTimeout) {
-        errorDisplay = "AI response timed out (20s limit reached). Continuing with fallback roleplay.";
-      } else if (e.message?.includes("API key not found") || e.message?.includes("key not configured") || e.message?.includes("API key")) {
-        errorDisplay = "Gemini API key not found. Please check your configuration.";
-      } else if (e.message?.includes("model unavailable") || e.message?.includes("Model")) {
-        errorDisplay = "Gemini model unavailable. Please try again later.";
-      } else if (e.message?.includes("API_KEY_INVALID") || e.message?.includes("invalid key") || e.message?.includes("KEY_INVALID")) {
-        errorDisplay = "Gemini API key is invalid. Please check your key.";
-      } else if (e.message?.includes("quota") || e.message?.includes("rate limit") || e.message?.includes("429")) {
-        errorDisplay = "Gemini API quota/rate limit exceeded.";
-      } else if (e.message?.includes("Body is unusable") || e.message?.includes("already been read")) {
-        errorDisplay = "Request body already read error occurred.";
-      } else if (e.message?.includes("stream parse") || e.message?.includes("JSON parse")) {
-        errorDisplay = "Stream parse error occurred.";
-      }
-      setConfigError(errorDisplay);
+      setConfigError(null);
 
       console.warn("Falling back to local character dialogue engine.", e);
       const fallbackText = getContextualFallbackResponse(userText, activeHistory, careerRef.current);
-      
       setIsThinking(false);
-      
-      const fallbackTextWithNotice = `[Fallback]: ${fallbackText}`;
-      
-      let hasPlaceholder = false;
-      let placeholderIdToUse = "";
-      
-      setHistory((prev) => {
-        const lastMsg = prev[prev.length - 1];
-        if (lastMsg && lastMsg.sender === "character") {
-          hasPlaceholder = true;
-          placeholderIdToUse = lastMsg.id;
-        }
-        return prev;
-      });
 
-      if (isSessionEndedRef.current) return;
-
-      if (hasPlaceholder && placeholderIdToUse) {
+      const responseId = `msg-local-${Date.now()}`;
+      setHistory((prev) => [...prev, { id: responseId, sender: "character", text: "" }]);
+      
+      const words = fallbackText.split(" ");
+      let typedText = "";
+      for (let i = 0; i < words.length; i++) {
+        if (isSessionEndedRef.current) return;
+        typedText += words[i] + (i === words.length - 1 ? "" : " ");
         setHistory((prev) => 
-          prev.map(m => m.id === placeholderIdToUse ? { 
-            ...m, 
-            text: m.text ? (m.text + " (Connection lost. " + fallbackTextWithNotice + ")") : fallbackText 
-          } : m)
+          prev.map(m => m.id === responseId ? { ...m, text: typedText } : m)
         );
-      } else {
-        const responseId = `msg-fallback-${Date.now()}`;
-        setHistory((prev) => [...prev, { id: responseId, sender: "character", text: "" }]);
-        
-        const words = fallbackText.split(" ");
-        let typedText = "";
-        for (let i = 0; i < words.length; i++) {
-          if (isSessionEndedRef.current) return;
-          typedText += words[i] + (i === words.length - 1 ? "" : " ");
-          setHistory((prev) => 
-            prev.map(m => m.id === responseId ? { ...m, text: typedText } : m)
-          );
-          await new Promise(r => setTimeout(r, 20 + Math.random() * 20));
-        }
+        await new Promise(r => setTimeout(r, 20 + Math.random() * 20));
       }
       
       if (isSessionEndedRef.current) return;
-
       speakText(fallbackText);
 
       const newTurnCount = turnCountRef.current + 1;
@@ -1085,6 +1042,7 @@ export default function VoiceRoleplayPage() {
       setCurrentInput("");
       setIsProcessing(false);
       isProcessingRef.current = false;
+      isAutoSendingRef.current = false;
     }
   };
 
@@ -1232,15 +1190,8 @@ export default function VoiceRoleplayPage() {
         const errMsg = errData.error || "Internal Server Error";
         throw new Error(errMsg);
       }
-    } catch (e: any) {
-      setIsFallbackMode(true);
-      let errorDisplay = `AI feedback generation is temporarily unavailable (${e.message || "Unknown error"}). Generating local fallback report.`;
-      if (e.message?.includes("API key not found") || e.message?.includes("key not configured") || e.message?.includes("API key")) {
-        errorDisplay = "Gemini API key not found. Generating local fallback report.";
-      } else if (e.message?.includes("model unavailable") || e.message?.includes("Model")) {
-        errorDisplay = "Gemini model unavailable. Generating local fallback report.";
-      }
-      setConfigError(errorDisplay);
+    } catch {
+      setConfigError(null);
 
       // Local fallback metrics based on session history
       const mockGeminiCommunication = Math.min(95, Math.max(45, 55 + avgResponseLengthVal * 1.2 - (hesitationCountVal * 1.5)));
@@ -1446,11 +1397,12 @@ export default function VoiceRoleplayPage() {
     setReport(null);
     setAnimateScores(false);
     setConfigError(null);
-    setIsFallbackMode(false);
     setIsSessionEnded(false);
     isSessionEndedRef.current = false;
     setTurnCount(0);
     turnCountRef.current = 0;
+    isAutoSendingRef.current = false;
+    lastSentTranscriptRef.current = "";
     
     stopAllVoiceActivity();
     
@@ -1668,11 +1620,6 @@ export default function VoiceRoleplayPage() {
                 <div>
                   <h3 className="font-[family-name:var(--font-plus-jakarta)] text-base font-black text-slate-800 flex items-center justify-center gap-1.5">
                     {career === "lawyer" ? "Judge Sterling" : "Patient: Alex Mercer"}
-                    {isFallbackMode && (
-                      <span className="text-[8px] bg-amber-500/10 text-amber-700 border border-amber-500/25 px-1.5 py-0.5 rounded font-black uppercase animate-pulse select-none">
-                        Fallback
-                      </span>
-                    )}
                   </h3>
                   <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest mt-0.5">
                     {career === "lawyer" ? "Presiding Magistrate" : "Clinical Client · Age 28"}

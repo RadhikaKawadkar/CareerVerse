@@ -8,6 +8,9 @@ const isPlaceholder =
   !supabaseAnonKey ||
   supabaseUrl.includes("placeholder") ||
   supabaseAnonKey.includes("placeholder") ||
+  supabaseUrl.includes("PASTE_URL") ||
+  supabaseAnonKey.includes("PASTE_KEY") ||
+  !supabaseUrl.startsWith("http") ||
   supabaseUrl === "https://your-supabase-project.supabase.co" ||
   supabaseAnonKey === "your-supabase-anon-key";
 

@@ -8,6 +8,55 @@ export type Message = {
   timestamp: string; // ISO
 };
 
+function buildCoachPayload(
+  messageText: string,
+  history: Message[],
+  selectedMentor: MentorProfile | null,
+  profile: UnifiedProfileV12
+) {
+  return {
+    message: messageText,
+    history: history.map((m) => ({ role: m.sender === "user" ? "user" : "model", text: m.text })),
+    mentor: selectedMentor,
+    profile: {
+      name: profile.name,
+      grade: profile.grade,
+      xp: profile.xp,
+      level: profile.level,
+      dna: profile.dna,
+      completedSimulations: profile.completedSimulations,
+      goals: profile.goals,
+      interests: profile.interests,
+      favoriteCareers: profile.favoriteCareers,
+      journalReflections: profile.journalReflections,
+    },
+  };
+}
+
+async function fetchCoachReply(
+  messageText: string,
+  history: Message[],
+  selectedMentor: MentorProfile | null,
+  profile: UnifiedProfileV12
+): Promise<string> {
+  const response = await fetch("/api/coaching/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildCoachPayload(messageText, history, selectedMentor, profile)),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || `API returned status ${response.status}`);
+  }
+
+  const reply = typeof data.reply === "string" ? data.reply : typeof data.text === "string" ? data.text : "";
+  if (!reply.trim()) {
+    throw new Error(data.error || "Empty coaching response");
+  }
+  return reply;
+}
+
 /**
  * Service abstraction for Gemini AI Coach responses.
  * Attempts to call the local Edge API endpoint. If not configured or fails,
@@ -20,61 +69,16 @@ export async function generateAICoachResponse(
   profile: UnifiedProfileV12
 ): Promise<string> {
   try {
-    const response = await fetch("/api/coaching/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message: messageText,
-        history: history.map((m) => ({ role: m.sender === "user" ? "user" : "model", text: m.text })),
-        mentor: selectedMentor,
-        profile: {
-          name: profile.name,
-          grade: profile.grade,
-          xp: profile.xp,
-          level: profile.level,
-          dna: profile.dna,
-          completedSimulations: profile.completedSimulations,
-          goals: profile.goals,
-          interests: profile.interests,
-          favoriteCareers: profile.favoriteCareers,
-          journalReflections: profile.journalReflections,
-        },
-      }),
-    });
-
-    if (response.ok) {
-      const contentType = response.headers.get("content-type");
-      if (contentType && contentType.includes("text/event-stream")) {
-        const reader = response.body?.getReader();
-        if (reader) {
-          const decoder = new TextDecoder();
-          let fullText = "";
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            fullText += decoder.decode(value, { stream: true });
-          }
-          return fullText;
-        }
-      } else {
-        const data = await response.json();
-        if (data.text) {
-          return data.text;
-        }
-      }
-    }
+    return await fetchCoachReply(messageText, history, selectedMentor, profile);
   } catch (error) {
     console.warn("Edge API coaching route failed or unconfigured, falling back to local simulation layer.", error);
+    return getIntelligentFallbackResponse(messageText, history, selectedMentor, profile);
   }
-
-  return getIntelligentFallbackResponse(messageText, history, selectedMentor, profile);
 }
 
 /**
  * Streams the AI response chunk-by-chunk invoking onChunk callback.
- * Falls back to simulated typing of fallback response if unconfigured.
+ * Uses the non-streaming Gemini API route, then simulates typing for UI continuity.
  */
 export async function streamAICoachResponse(
   messageText: string,
@@ -84,69 +88,26 @@ export async function streamAICoachResponse(
   onChunk: (chunk: string) => void
 ): Promise<string> {
   try {
-    const response = await fetch("/api/coaching/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        message: messageText,
-        history: history.map((m) => ({ role: m.sender === "user" ? "user" : "model", text: m.text })),
-        mentor: selectedMentor,
-        profile: {
-          name: profile.name,
-          grade: profile.grade,
-          xp: profile.xp,
-          level: profile.level,
-          dna: profile.dna,
-          completedSimulations: profile.completedSimulations,
-          goals: profile.goals,
-          interests: profile.interests,
-          favoriteCareers: profile.favoriteCareers,
-          journalReflections: profile.journalReflections,
-        },
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`API returned status ${response.status}`);
+    const reply = await fetchCoachReply(messageText, history, selectedMentor, profile);
+    const words = reply.split(" ");
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i] + (i === words.length - 1 ? "" : " ");
+      onChunk(word);
+      await new Promise((resolve) => setTimeout(resolve, 12 + Math.random() * 18));
     }
-
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error("No response body reader available");
-    }
-
-    const decoder = new TextDecoder();
-    let accumulatedText = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value, { stream: true });
-      accumulatedText += chunk;
-      onChunk(chunk);
-    }
-
-    return accumulatedText;
+    return reply;
   } catch (error) {
-    console.warn("Edge API coaching streaming failed, falling back to simulated stream.", error);
-    
+    console.warn("Edge API coaching route failed, falling back to simulated local response.", error);
     const fallbackText = getIntelligentFallbackResponse(messageText, history, selectedMentor, profile);
-    
-    // Simulate streaming word-by-word with realistic typewriter timings
     const words = fallbackText.split(" ");
     for (let i = 0; i < words.length; i++) {
       const word = words[i] + (i === words.length - 1 ? "" : " ");
       onChunk(word);
       await new Promise((resolve) => setTimeout(resolve, 15 + Math.random() * 25));
     }
-    
     return fallbackText;
   }
 }
-
 function getIntelligentFallbackResponse(
   messageText: string,
   history: Message[],
@@ -260,3 +221,6 @@ function getIntelligentFallbackResponse(
 
   return `${introduction}${contextRecall}${advice}\n\n*Feel free to ask me more specific questions about entry requirements, daily schedules, or typical work-life balance!*`;
 }
+
+
+

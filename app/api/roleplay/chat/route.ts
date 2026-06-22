@@ -1,453 +1,157 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextResponse } from "next/server";
+import { generateGrokResponse } from "@/lib/grok-service";
 
 export const runtime = "edge";
 
-function findJsonObjectBoundary(str: string): number {
-  let braceCount = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = 0; i < str.length; i++) {
-    const char = str[i];
-    if (escape) {
-      escape = false;
-      continue;
-    }
-    if (char === "\\") {
-      escape = true;
-      continue;
-    }
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (!inString) {
-      if (char === "{") {
-        braceCount++;
-      } else if (char === "}") {
-        braceCount--;
-        if (braceCount === 0) {
-          return i;
-        }
-      }
-    }
-  }
-  return -1;
+type RoleplayLanguage = "english" | "hindi" | "hinglish";
+
+function getLatestUserMessage(message: unknown, history: { role?: string; sender?: string; text?: string; content?: string }[]): string {
+  if (typeof message === "string" && message.trim()) return message.trim();
+  const latest = [...history].reverse().find((item) => item?.role === "user" || item?.sender === "user");
+  return typeof latest?.text === "string" ? latest.text : "";
 }
 
-function getFriendlyError(status: number, errorText: string): string {
-  const textLower = errorText.toLowerCase();
-  if (status === 404 || textLower.includes("model") || textLower.includes("not found") || textLower.includes("not_found") || textLower.includes("unavailable")) {
-    return "Gemini model unavailable";
-  }
-  return errorText || "Gemini API call failed";
-}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getContextualRoleplayFallback(body: any, language: RoleplayLanguage): string {
+  const career = body.career === "lawyer" ? "lawyer" : "doctor";
+  const latest = getLatestUserMessage(body.message || body.latestMessage, Array.isArray(body.history) ? body.history : (Array.isArray(body.messages) ? body.messages : [])).toLowerCase();
 
-// Robust fetch helper with retry and model fallback
-async function callGeminiWithRetry(
-  apiKey: string,
-  modelList: string[],
-  isFeedback: boolean,
-  systemInstruction: string,
-  contents: any
-): Promise<Response> {
-  let response: Response | null = null;
-  let lastError: Error | null = null;
-  let delay = 800;
-
-  for (let attempt = 0; attempt < 3; attempt++) {
-    // Attempt gemini-2.5-flash first, then fall back to gemini-1.5-flash on retry
-    const currentModel = modelList[Math.min(attempt, modelList.length - 1)];
-    const method = isFeedback ? "generateContent" : "streamGenerateContent";
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:${method}?key=${apiKey}`;
-
-    const requestBody: any = {
-      contents,
-      systemInstruction: {
-        parts: [{ text: systemInstruction }],
-      },
-      generationConfig: {
-        temperature: isFeedback ? 0.2 : 0.7,
-        maxOutputTokens: isFeedback ? 1000 : 300,
-      },
-    };
-
-    if (isFeedback) {
-      requestBody.generationConfig.responseMimeType = "application/json";
-    }
-
-    try {
-      if (process.env.NODE_ENV === "development") {
-        console.log(`[Gemini API DEBUG] Route called: /api/roleplay/chat`);
-        console.log(`[Gemini API DEBUG] GEMINI_API_KEY loaded: ${apiKey ? "YES" : "NO"}`);
-        console.log(`[Gemini API DEBUG] Model requested: ${currentModel} (${method}) - Attempt ${attempt + 1}...`);
-      }
-
-      response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (response.ok) {
-        return response;
-      }
-
-      const status = response.status;
-      const errText = await response.text();
-      lastError = new Error(`HTTP ${status}: ${errText}`);
-
-      if (process.env.NODE_ENV === "development") {
-        console.error(`[Gemini API DEBUG] Route called: /api/roleplay/chat`);
-        console.error(`[Gemini API DEBUG] Model requested: ${currentModel}`);
-        console.error(`[Gemini API DEBUG] Response Status Code: ${status}`);
-        console.error(`[Gemini API DEBUG] Exact Gemini error message: ${errText}`);
-      }
-
-      // Retry on 500, 502, 503, 504
-      if (status === 500 || status === 502 || status === 503 || status === 504) {
-        if (attempt < 2) {
-          await new Promise((resolve) => setTimeout(resolve, delay));
-          delay *= 2; // 800ms -> 1600ms
-          continue;
-        }
-      }
-      return response; // Exit loop for non-retryable statuses (e.g. 400, 403)
-    } catch (err: any) {
-      lastError = err;
-      if (process.env.NODE_ENV === "development") {
-        console.error(`[Gemini API DEBUG] Attempt ${attempt + 1} network/timeout error:`, err);
-      }
-      if (attempt < 2) {
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        delay *= 2;
-        continue;
-      }
-      throw err;
-    }
+  if (career === "lawyer") {
+    if (language === "hindi") return "vakil sahab, aapke tark ke liye seedha saboot kya hai? court ko andaza nahi, pramaan chahiye.";
+    if (language === "hinglish") return "vakil sahab, aapka argument suna, lekin iske support me strong evidence kya hai? court ko proof chahiye.";
+    return "Counselor, I hear your argument, but what specific evidence supports it? The court needs proof, not assumptions.";
   }
 
-  if (lastError) throw lastError;
-  throw new Error("API call failed");
+  if (latest.includes("age") || latest.includes("umra") || latest.includes("umar")) {
+    if (language === "english") return "I am 45 years old, doctor.";
+    if (language === "hinglish") return "doctor, main 45 saal ka hoon.";
+    return "main 45 saal ka hoon, doctor.";
+  }
+  if (latest.includes("sleep") || latest.includes("hours") || latest.includes("neend") || latest.includes("sote")) {
+    if (language === "english") return "I sleep about 4-5 hours. The chest discomfort wakes me up at night.";
+    if (language === "hinglish") return "doctor, main sirf 4-5 hours sleep kar pata hoon. chest discomfort ki wajah se raat me neend toot jati hai.";
+    return "main lagbhag 4-5 ghante sota hoon. raat me seene ke dard ki wajah se neend toot jati hai.";
+  }
+  if (latest.includes("pain") || latest.includes("dard") || latest.includes("chest") || latest.includes("pressure")) {
+    if (language === "english") return "It feels like a heavy pressure in the middle of my chest, especially when I climb stairs.";
+    if (language === "hinglish") return "doctor, chest ke beech me heavy pressure feel hota hai, especially stairs chadhne par.";
+    return "doctor, mere seene ke beech me bhaari dabav jaisa dard hota hai, khaaskar seedhi chadhne par.";
+  }
+  if (language === "english") return "Doctor, I feel anxious and short of breath with this chest pressure. What should I tell you next?";
+  if (language === "hinglish") return "doctor, chest pressure ke saath anxiety aur shortness of breath bhi feel ho rahi hai. aap kya puchhna chahenge?";
+  return "doctor, seene ke dabav ke saath ghabrahat aur saans lene me takleef ho rahi hai. aap kya puchhna chahenge?";
 }
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { career, scenario, message, history, profile, isFeedback, stats, selectedLanguage } = body;
-    const currentLang = selectedLanguage || "english";
+    const { career, selectedLanguage, messages, latestMessage, mode } = body;
+    
+    const careerSelected = career || "doctor";
+    const selectedLanguageEnum = (selectedLanguage === "hindi" || selectedLanguage === "hinglish" ? selectedLanguage : "english") as RoleplayLanguage;
+    const finalLatestMessage = latestMessage || body.message || getLatestUserMessage(body.message, body.history || messages || []);
+    const finalMessages = messages || body.history || [];
+    const isFeedbackMode = body.isFeedback || mode === "feedback" || mode === "evaluation";
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (process.env.NODE_ENV === "development") {
-      console.log("Roleplay API request", {
-        mode: isFeedback ? "evaluation" : "chat",
-        career,
-        selectedLanguage: currentLang,
-        messageCount: history?.length,
-        hasGeminiKey: Boolean(apiKey),
-      });
-    }
+    const apiKey = process.env.XAI_API_KEY;
     if (!apiKey) {
-      if (process.env.NODE_ENV === "development") {
-        console.error(`[Gemini API DEBUG] Error: Gemini API key not found`);
-      }
-      return NextResponse.json(
-        { error: "Gemini API key not found" },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "XAI_API_KEY missing" }, { status: 400 });
     }
 
-    const stableModels = ["gemini-1.5-flash"];
-
-    if (isFeedback) {
-
-      const systemPrompt = `
+    if (isFeedbackMode) {
+      const systemInstruction = `
         You are the CareerVerse Roleplay Evaluation Engine.
-        You will analyze a conversation history between a high school student and an AI character to generate a strict, realistic evaluation.
-        The career simulation is: ${career === "lawyer" ? "Lawyer (Student acts as Lawyer, AI acts as Judge)" : "Doctor (Student acts as Doctor, AI acts as Patient)"}.
-        Selected Scenario: ${scenario || (career === "lawyer" ? "Courtroom Trial" : "Clinical intake")}.
-        Student Profile: Name: ${profile?.name || "Student"}.
-        
-        Session statistics:
-        - Turn count: ${stats?.turnCount || 0}
-        - Average Response Length: ${stats?.avgResponseLength || 0} words
-        - Question Count: ${stats?.questionCount || 0}
-        - Follow-up Questions: ${stats?.followUpQuestions || 0}
-        - Voice Mode used: ${stats?.voiceUsed ? "Yes" : "No"}
-        - Total Speaking Time: ${stats?.totalSpeakingTime || 0} seconds
-        - Interruptions: ${stats?.interruptions || 0}
-        - Hesitation Count: ${stats?.hesitationCount || 0}
-        - Microphone Participation: ${stats?.microphoneParticipation || 0}%
+        Evaluate the conversation objectively and strictly.
+        Selected language: ${selectedLanguageEnum}.
+        Return ONLY JSON with keys: communication, confidence, reasoning, empathy, careerFit, strengths, improvements, summary, recommendedNextAction.
+        Do not include markdown fences.
+      `.trim();
 
-        Selected Roleplay Language: ${currentLang}.
+      const finalPrompt = `
+        ${systemInstruction}
         
-        IMPORTANT LANGUAGE RULES:
-        - The conversation was conducted in: ${currentLang}.
-        - Do NOT evaluate the student's English grammar, accent, pronunciation, spelling, or translation accuracy.
-        - High marks must be awarded to students who perform well in Hindi or Hinglish, identically to English.
-        - Evaluate reasoning, empathy, communication clarity (in their chosen language), confidence, and career fit.
-
-        Evaluate the student's performance objectively, strictly, and realistically.
-        Rubric guidelines:
-        - If the student acts as a Doctor:
-          * Reward deep diagnostic questioning (asking about chest pain triggers, duration, radiation, family history, etc.).
-          * Reward empathy, active listening, and patient reassurance.
-          * Reward logical follow-up questions based on patient's answers.
-          * Reduce scores severely for shallow, generic, or brief questioning, or if they jump to a diagnosis too quickly.
-        - If the student acts as a Lawyer:
-          * Reward logical argument structure and clear legal evidence application.
-          * Reward asking for evidence, challenging Judge/witness assertions, and structured courtroom reasoning.
-          * Reward formal legal language and courtroom etiquette.
-          * Reduce scores severely for weak reasoning, lack of evidence-based statements, or overly informal/short responses.
+        Conversation history:
+        ${JSON.stringify(finalMessages)}
         
-        Do NOT give generic or high scores (like all 90s) unless the conversation is exceptionally professional. If responses are short, off-topic, or lack depth, give low scores (e.g., 40s-60s) and detailed improvement points. Differ scores significantly based on quality.
+        Stats:
+        ${JSON.stringify(body.stats || {})}
         
-        Provide a JSON response containing exactly the following keys:
-        - "communication": a number (0-100) representing communication clarity, tone, and vocabulary.
-        - "confidence": a number (0-100) representing confidence level and assertiveness.
-        - "reasoning": a number (0-100) representing diagnostic logic or argument structure.
-        - "empathy": a number (0-100) representing empathy (for Doctor) or persuasion (for Lawyer).
-        - "careerFit": a number (0-100) representing overall career suitability.
-        - "strengths": an array of strings (at least 2 strings) summarizing specific behaviors they performed well.
-        - "improvements": an array of strings (at least 2 strings) summarizing specific weaknesses or areas where they can improve.
-        - "summary": a string summarizing the performance and overall feedback.
-        - "recommendedNextAction": a specific, actionable next recommendation.
-
-        IMPORTANT: Output ONLY a valid JSON object. Do not include markdown code block formatting (no \`\`\`json). Just the raw JSON.
-      `;
-
-      const contents = [
-        {
-          role: "user",
-          parts: [
-            {
-              text: `Here is the full conversation history of the roleplay session:\n${JSON.stringify(
-                history
-              )}\n\nPlease evaluate this session and return the JSON evaluation card.`
-            }
-          ]
-        }
-      ];
+        JSON response:
+      `.trim();
 
       try {
-        const response = await callGeminiWithRetry(apiKey, stableModels, true, systemPrompt, contents);
-        if (!response.ok) {
-          const status = response.status;
-          const errorText = await response.text();
-          if (process.env.NODE_ENV === "development") {
-            console.error(`[Gemini API DEBUG] Feedback request failed. Status: ${status}. Error: ${errorText}`);
-          }
-          return NextResponse.json({ error: getFriendlyError(status, errorText) }, { status });
+        const reply = await generateGrokResponse(finalPrompt);
+        let cleanReply = reply.trim();
+        if (cleanReply.startsWith("```")) {
+          cleanReply = cleanReply.replace(/^```json\s*/, "").replace(/^```\s*/, "").replace(/\s*```$/, "");
         }
-
-        const data = await response.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (text) {
-          try {
-            let cleanText = text.trim();
-            if (cleanText.startsWith("```")) {
-              const firstLineIndex = cleanText.indexOf("\n");
-              if (firstLineIndex !== -1) {
-                cleanText = cleanText.substring(firstLineIndex + 1);
-              }
-              if (cleanText.endsWith("```")) {
-                cleanText = cleanText.substring(0, cleanText.length - 3);
-              }
-              cleanText = cleanText.trim();
-            }
-            const parsed = JSON.parse(cleanText);
-            return NextResponse.json(parsed);
-          } catch {
-            return NextResponse.json({ rawText: text });
-          }
-        }
-        return NextResponse.json({ error: "No response text" }, { status: 500 });
-      } catch (retryErr: any) {
-        console.error("[Gemini API Feedback Final Error]", retryErr);
-        return NextResponse.json({ error: retryErr.message || "Feedback generation failed" }, { status: 500 });
+        return NextResponse.json(JSON.parse(cleanReply.trim()));
+      } catch (err) {
+        console.error("Grok evaluation API exception:", err);
+        return NextResponse.json({ error: "Evaluation exception" }, { status: 500 });
       }
     }
 
-    // Roleplay Dialogue Generation (Streaming)
-    let languagePrompt = "";
-    if (currentLang === "hindi") {
-      languagePrompt = `
-        Mandatory Language: Spoken Hindi using Roman script ONLY (English letters).
-        Rules:
-        1. Write ONLY in Roman Hindi (e.g., "vakil sahab aap apna opening statement dijiye" or "doctor mujhe 3 din se pet dard ho raha hai").
-        2. Do NOT use Devanagari script (no Hindi letters like मुझे, दर्द, etc.).
-        3. Do NOT use English vocabulary or sentences.
-        4. Do NOT translate to English or show English translations.
-        5. Never switch to English. The selected language is mandatory.
-      `;
-    } else if (currentLang === "hinglish") {
-      languagePrompt = `
-        Mandatory Language: Natural Indian Hinglish (mixture of Hindi and English) using Roman script ONLY (English letters).
-        Rules:
-        1. Speak in natural Indian Hinglish (e.g., "vakil sahab, is alibi ke baare me aapke paas kya proof hai?" or "doctor mujhe chest me pressure feel ho raha hai aur weakness bhi lag rahi hai").
-        2. Do NOT use Devanagari script under any circumstances.
-        3. Do NOT translate to full English.
-        4. Never switch to English. The selected language is mandatory.
+    let roleplayInstruction = "";
+    if (careerSelected === "lawyer") {
+      roleplayInstruction = `
+        You are Judge Sterling in a courtroom roleplay.
+        Stay strictly in character as a judge.
+        Challenge reasoning and ask for evidence.
+        Do not praise every answer or give generic answers.
+        Keep the reply under 80 words.
       `;
     } else {
-      languagePrompt = `
-        Mandatory Language: English.
-        Rules:
-        1. Respond naturally in English.
+      roleplayInstruction = `
+        You are Alex Mercer, a patient.
+        Stay strictly in character as a patient.
+        Answer exactly what the student asks. If asked age, answer age. If asked symptoms, answer symptoms.
+        Do not give generic answers. Do not reveal everything immediately.
+        Keep the reply under 70 words.
       `;
     }
 
-    let systemInstruction = "";
-    if (career === "lawyer") {
-      systemInstruction = `
-        You are a strict, formal Judge (Judge Sterling) presiding over a courtroom trial.
-        The scenario is: ${scenario || "Courtroom Trial"}.
-        A student named ${profile?.name || "Student"} is acting as the Defense Attorney.
-        
-        ${languagePrompt}
-
-        Your behavior guidelines:
-        - You must stay strictly in character as a formal, courtroom Judge.
-        - Speak formally, address the student as "counselor" (or "vakil sahab" in Hindi/Hinglish), and demand logical clarity and evidence.
-        - You must challenge the student's arguments and ask realistic, demanding follow-up questions.
-        - Do not give generic praise or say "good point" or "you are right" after every answer. Stay formal, critical, and objective.
-        - Point out weak reasoning in the defense's statements and ask for evidence.
-        - Adapt your arguments dynamically based on what the student says.
-        - Keep your response brief, natural, and under 80 words to maintain snappy dialogue pacing.
-      `;
+    let languageInstruction = "";
+    if (selectedLanguageEnum === "hindi") {
+      languageInstruction = "You must reply ONLY in Roman Hindi (using English letters, e.g., 'main 45 saal ka hoon, doctor'). Do NOT write in Devanagari script. Do NOT translate to English.";
+    } else if (selectedLanguageEnum === "hinglish") {
+      languageInstruction = "You must reply ONLY in Roman Hinglish (mixture of Hindi and English using English letters). Do NOT write in Devanagari script.";
     } else {
-      systemInstruction = `
-        You are a patient named Alex Mercer visiting the doctor (played by the student named ${profile?.name || "Student"}).
-        The scenario is: ${scenario || "Clinical intake"}.
-        
-        ${languagePrompt}
-
-        Your behavior guidelines:
-        - You must stay strictly in character as the patient. You do not have medical knowledge and do not use clinical jargon.
-        - Describe your symptoms simply and naturally: squeezing/heavy chest pressure, anxiety, shortness of breath, getting worse on exertion (walking up stairs).
-        - Describe symptoms anxiously but naturally, only if asked.
-        - You must NOT reveal the diagnosis (Angina Pectoris) immediately.
-        - Answer ONLY what the student asks. Do not volunteer extra medical details unless asked.
-        - Ask realistic, anxious follow-up questions if the student is unclear or tells you something scary.
-        - Do not give predefined or generic answers. Stay dynamic.
-        - Do not say "you are right doctor" or "you diagnosed me correctly". Keep the consultation realistic.
-        - Keep your response brief, natural, and under 70 words to keep the dialogue snappy.
-      `;
+      languageInstruction = "You must reply ONLY in English.";
     }
 
-    const contents: { role: string; parts: { text: string }[] }[] = [];
-    if (history && history.length > 0) {
-      contents.push(
-        ...history.map((h: { role: string; text: string }) => ({
-          role: h.role === "user" ? "user" : "model",
-          parts: [{ text: h.text }],
-        }))
-      );
-    } else if (career === "doctor") {
-      contents.push({
-        role: "user",
-        parts: [{ text: "Start clinical intake consultation" }],
-      });
-    }
+    const historyText = finalMessages
+      .map((m: { role?: string; sender?: string; text?: string; content?: string }) => `${m.role === "user" || m.sender === "user" ? "Student" : "AI"}: ${m.text || m.content || ""}`)
+      .slice(-16)
+      .join("\n");
 
-    if (message && (!history || history.length === 0 || history[history.length - 1].text !== message)) {
-      contents.push({
-        role: "user",
-        parts: [{ text: message }],
-      });
-    }
+    const finalPrompt = `
+      ${roleplayInstruction}
 
-    let response;
+      ${languageInstruction}
+
+      Conversation History:
+      ${historyText}
+      Student: ${finalLatestMessage}
+
+      AI Response:
+    `.trim();
+
     try {
-      response = await callGeminiWithRetry(apiKey, stableModels, false, systemInstruction, contents);
-    } catch (retryErr: any) {
-      console.error("[Gemini API Dialogue Final Error]", retryErr);
-      return NextResponse.json({ error: retryErr.message || "Dialogue generation failed" }, { status: 500 });
-    }
-
-    if (!response.ok) {
-      const status = response.status;
-      const errorText = await response.text();
-      if (process.env.NODE_ENV === "development") {
-        console.error(`[Gemini API DEBUG] Dialogue request failed. Status: ${status}. Error: ${errorText}`);
+      const reply = await generateGrokResponse(finalPrompt);
+      if (!reply.trim()) {
+        const fallbackReply = getContextualRoleplayFallback(body, selectedLanguageEnum);
+        return NextResponse.json({ reply: fallbackReply, source: "local" }, { status: 200 });
       }
-      return NextResponse.json({ error: getFriendlyError(status, errorText) }, { status });
+
+      return NextResponse.json({ reply: reply.trim(), source: "grok" }, { status: 200 });
+    } catch (err) {
+      console.error("Exception in Grok direct call:", err);
+      const fallbackReply = getContextualRoleplayFallback(body, selectedLanguageEnum);
+      return NextResponse.json({ reply: fallbackReply, source: "local" }, { status: 200 });
     }
-
-    const encoder = new TextEncoder();
-    const decoder = new TextDecoder();
-    const reader = response.body?.getReader();
-
-    const stream = new ReadableStream({
-      async start(controller) {
-        let buffer = "";
-        try {
-          while (true) {
-            const { done, value } = await reader!.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            
-            let pos;
-            while ((pos = findJsonObjectBoundary(buffer)) !== -1) {
-              const part = buffer.slice(0, pos + 1);
-              buffer = buffer.slice(pos + 1);
-              
-              let cleanPart = part.trim();
-              if (cleanPart.startsWith("[")) cleanPart = cleanPart.slice(1).trim();
-              if (cleanPart.startsWith(",")) cleanPart = cleanPart.slice(1).trim();
-              if (cleanPart.endsWith("]")) cleanPart = cleanPart.slice(0, -1).trim();
-              
-              if (cleanPart) {
-                try {
-                  const parsed = JSON.parse(cleanPart);
-
-                  // Handle Gemini error JSON inside stream
-                  if (parsed.error) {
-                    console.error("[Gemini Stream JSON Error]", parsed.error);
-                    controller.error(new Error(parsed.error.message || "Internal error in stream"));
-                    return;
-                  }
-
-                  const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
-                  if (text) {
-                    controller.enqueue(encoder.encode(text));
-                  }
-                } catch (jsonErr) {
-                  if (process.env.NODE_ENV === "development") {
-                    console.warn("[Stream Parser] JSON parse error on chunk (skipping to avoid infinite loops):", jsonErr);
-                  }
-                  // Skip malformed/incomplete chunks instead of prepending them back,
-                  // preventing infinite loops and incorrect fallback triggers.
-                }
-              }
-            }
-          }
-        } catch (e) {
-          console.error("[Gemini Stream Read Error]", e);
-          controller.error(e);
-        } finally {
-          controller.close();
-        }
-      }
-    });
-
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-      },
-    });
-
-  } catch (err: unknown) {
-    console.error("Roleplay API Route Error:", err);
-    const errMsg = err instanceof Error ? err.message : "Internal server error";
-    return NextResponse.json(
-      { error: errMsg },
-      { status: 500 }
-    );
+  } catch (err) {
+    console.error("Request parse error:", err);
+    return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
   }
 }

@@ -1,66 +1,322 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
+  ArrowRight,
   Bot,
+  Brain,
   BriefcaseBusiness,
-  Code2,
-  FlaskConical,
+  CheckCircle2,
+  Compass,
+  GraduationCap,
   Lock,
-  Palette,
+  Map,
+  Mic,
+  PlayCircle,
   Sparkles,
   Stethoscope,
-  LogOut,
-  Bookmark,
-  BookmarkCheck,
-  Trophy,
-  Activity,
-  Award,
-  BookOpen,
+  TrendingUp,
+  Users,
+  type LucideIcon,
 } from "lucide-react";
-import { ExperienceCard } from "@/components/explore/experience-card";
-import { ProgressRing } from "@/components/explore/progress-ring";
 import { MotionFadeIn, MotionStagger, MotionStaggerItem } from "@/components/shared/motion";
-import { Button } from "@/components/ui/button";
-import { useAuth } from "@/lib/AuthContext";
-import { db, type DashboardData } from "@/lib/database";
-import {
-  getGuestProfile,
-  getHubProgress,
-  setExperienceStatus,
-} from "@/lib/profile-storage";
+import { getGuestProfile, getResumePath } from "@/lib/profile-storage";
+import { analyzeProfile } from "@/lib/results-engine";
 import type { GuestProfile } from "@/types/profile";
 import { cn } from "@/lib/utils";
 
-const comingSoonCards = [
-  {
-    title: "Commerce Stream",
-    description: "Try accounting, business decisions, and market thinking before choosing Commerce.",
-    icon: BriefcaseBusiness,
+type NodeState = "completed" | "available" | "recommended" | "locked";
+
+type JourneyNode = {
+  title: string;
+  description: string;
+  status: string;
+  state: NodeState;
+  href: string;
+  icon: LucideIcon;
+};
+
+type RecentActivity = {
+  label: string;
+  title: string;
+  href: string;
+  icon: LucideIcon;
+};
+
+const stateStyles: Record<NodeState, {
+  accent: string;
+  badge: string;
+  glow: string;
+  icon: string;
+  line: string;
+}> = {
+  completed: {
+    accent: "border-emerald-400/45 bg-emerald-50/75 text-emerald-700",
+    badge: "bg-emerald-500/10 text-emerald-700 ring-1 ring-emerald-500/20",
+    glow: "shadow-emerald-500/10",
+    icon: "bg-emerald-500 text-white",
+    line: "from-emerald-300 via-sky-300 to-sky-200",
   },
-  {
-    title: "Arts Stream",
-    description: "Explore psychology, design, communication, and humanities-style thinking.",
-    icon: Palette,
+  available: {
+    accent: "border-sky-400/40 bg-sky-50/75 text-sky-700",
+    badge: "bg-sky-500/10 text-sky-700 ring-1 ring-sky-500/20",
+    glow: "shadow-sky-500/10",
+    icon: "bg-sky-500 text-white",
+    line: "from-sky-300 via-indigo-300 to-indigo-200",
   },
-  {
-    title: "Doctor Simulation",
-    description: "Step into a clinical day: patient conversations, diagnosis clues, and pressure.",
-    icon: Stethoscope,
+  recommended: {
+    accent: "border-amber-400/55 bg-amber-50/80 text-amber-800",
+    badge: "bg-amber-500/15 text-amber-800 ring-1 ring-amber-500/25",
+    glow: "shadow-amber-500/20",
+    icon: "bg-amber-400 text-slate-950",
+    line: "from-amber-300 via-sky-300 to-indigo-200",
   },
-];
+  locked: {
+    accent: "border-slate-200 bg-slate-100/70 text-slate-500",
+    badge: "bg-slate-200/70 text-slate-500 ring-1 ring-slate-300/50",
+    glow: "shadow-slate-500/5",
+    icon: "bg-slate-200 text-slate-500",
+    line: "from-slate-200 via-slate-200 to-slate-100",
+  },
+};
+
+function readJson<T>(key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function getRecommendedCareer(profile: GuestProfile) {
+  const analysis = analyzeProfile(profile);
+  const dna = analysis.careerDNA;
+  const hasCareerDna = profile.scienceCompleted || profile.sweCompleted || profile.scienceQuizScore !== null;
+
+  if (!hasCareerDna) {
+    return {
+      hasCareerDna,
+      role: "Career",
+      roleplayTitle: "Voice Roleplay",
+      simulationTitle: "Career Simulation",
+      explorerTitle: "Career Explorer",
+      roleIcon: BriefcaseBusiness,
+      simulationHref: "/explore/simulator",
+    };
+  }
+
+  if (dna.collaboration >= 68 && dna.analytical >= 58) {
+    return {
+      hasCareerDna,
+      role: "Doctor",
+      roleplayTitle: "Doctor Roleplay",
+      simulationTitle: "Doctor Simulation",
+      explorerTitle: "Medical Explorer",
+      roleIcon: Stethoscope,
+      simulationHref: "/explore/simulator/doctor",
+    };
+  }
+
+  if (dna.creativity >= dna.analytical && dna.creativity >= 62) {
+    return {
+      hasCareerDna,
+      role: "Designer",
+      roleplayTitle: "Designer Roleplay",
+      simulationTitle: "Design Simulation",
+      explorerTitle: "Design Explorer",
+      roleIcon: Sparkles,
+      simulationHref: "/explore/simulator/ux-designer",
+    };
+  }
+
+  return {
+    hasCareerDna,
+    role: "Software Engineer",
+    roleplayTitle: "Engineer Roleplay",
+    simulationTitle: "Engineering Simulation",
+    explorerTitle: "Tech Career Explorer",
+    roleIcon: BriefcaseBusiness,
+    simulationHref: "/explore/software-engineer/intro",
+  };
+}
+
+function buildJourneyNodes(profile: GuestProfile, roleplayCompleted: boolean): JourneyNode[] {
+  const career = getRecommendedCareer(profile);
+  const simulationComplete = profile.sweCompleted || profile.scienceCompleted;
+  const roleplayState: NodeState = roleplayCompleted
+    ? "completed"
+    : career.hasCareerDna
+      ? "recommended"
+      : "available";
+  const simulationState: NodeState = simulationComplete
+    ? "completed"
+    : roleplayCompleted || career.hasCareerDna
+      ? roleplayCompleted
+        ? "recommended"
+        : "available"
+      : "locked";
+  const mentorState: NodeState = roleplayCompleted || simulationComplete ? "available" : "locked";
+  const explorerState: NodeState = simulationComplete ? "recommended" : "available";
+  const communityState: NodeState = simulationComplete ? "available" : "locked";
+  const growthState: NodeState = simulationComplete ? "available" : "locked";
+
+  return [
+    {
+      title: "Career DNA",
+      description: "Decode your strengths and turn them into a sharper next move.",
+      status: profile.onboardingCompleted ? "Completed" : "Available",
+      state: profile.onboardingCompleted ? "completed" : "available",
+      href: "/results",
+      icon: Brain,
+    },
+    {
+      title: career.roleplayTitle,
+      description: `Talk to ${career.role === "Career" ? "professionals" : `${career.role.toLowerCase()} professionals`} through AI-powered voice conversations.`,
+      status: roleplayState === "recommended" ? "Recommended Next Step" : roleplayState === "completed" ? "Completed" : "Available",
+      state: roleplayState,
+      href: "/explore/roleplay",
+      icon: Mic,
+    },
+    {
+      title: career.simulationTitle,
+      description: `Experience a day in the life of ${career.role === "Career" ? "your future career" : `a ${career.role.toLowerCase()}`}.`,
+      status: simulationState === "recommended" ? "Recommended Next Step" : simulationState === "completed" ? "Completed" : simulationState === "locked" ? "Locked" : "Available",
+      state: simulationState,
+      href: simulationState === "locked" ? "/explore" : profile.sweStatus === "in_progress" ? getResumePath("swe", profile) : career.simulationHref,
+      icon: career.roleIcon,
+    },
+    {
+      title: "AI Mentor",
+      description: "Get personalized guidance and career advice for the choice ahead.",
+      status: mentorState === "locked" ? "Locked" : "Available",
+      state: mentorState,
+      href: "/explore/ai-mentor",
+      icon: Bot,
+    },
+    {
+      title: career.explorerTitle,
+      description: "Explore salaries, growth paths, education routes, and future opportunities.",
+      status: explorerState === "recommended" ? "Recommended Next Step" : "Available",
+      state: explorerState,
+      href: "/explore/opportunities",
+      icon: Map,
+    },
+    {
+      title: "Community",
+      description: "Learn with students exploring similar futures and real career stories.",
+      status: communityState === "locked" ? "Locked" : "Available",
+      state: communityState,
+      href: "/explore/community",
+      icon: Users,
+    },
+    {
+      title: "Growth Hub",
+      description: "Turn your journey into goals, skills, and momentum.",
+      status: growthState === "locked" ? "Locked" : "Available",
+      state: growthState,
+      href: "/explore/growth-hub",
+      icon: TrendingUp,
+    },
+  ];
+}
+
+function getRecentActivity(profile: GuestProfile): RecentActivity[] {
+  const roleplayHistory = readJson<Array<{ scenarioTitle?: string; role?: string }>>("careerverse-roleplay-history", []);
+  const viewedCareers = readJson<string[]>("explored-careers", []);
+  const bookmarks = readJson<string[]>("careerverse-bookmarks", []);
+  const lastRoleplay = roleplayHistory[0];
+  const lastViewed = viewedCareers[0] || bookmarks[0];
+  const lastSimulation = profile.sweStatus !== "not_started"
+    ? "Software Engineer"
+    : profile.scienceStatus !== "not_started"
+      ? "Science Lesson"
+      : null;
+
+  return [
+    {
+      label: "Last Roleplay",
+      title: lastRoleplay?.scenarioTitle || lastRoleplay?.role || "Start a voice session",
+      href: "/explore/roleplay",
+      icon: Mic,
+    },
+    {
+      label: "Last Simulation",
+      title: lastSimulation || "Try a career simulation",
+      href: profile.sweStatus === "in_progress" ? getResumePath("swe", profile) : "/explore/simulator",
+      icon: PlayCircle,
+    },
+    {
+      label: "Last Career Viewed",
+      title: lastViewed ? lastViewed.replaceAll("-", " ") : "Open Career Explorer",
+      href: "/explore/opportunities",
+      icon: Compass,
+    },
+  ];
+}
+
+function JourneyCard({ node }: { node: JourneyNode }) {
+  const styles = stateStyles[node.state];
+  const Icon = node.icon;
+  const disabled = node.state === "locked";
+
+  const content = (
+    <>
+      <div className="absolute inset-x-0 top-0 h-1 bg-current opacity-40" />
+      <div className="flex items-start gap-4">
+        <motion.div
+          animate={node.state === "recommended" ? { y: [0, -4, 0] } : undefined}
+          transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
+          className={cn("flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl shadow-lg", styles.icon)}
+        >
+          {node.state === "completed" ? <CheckCircle2 className="h-7 w-7" /> : node.state === "locked" ? <Lock className="h-7 w-7" /> : <Icon className="h-7 w-7" />}
+        </motion.div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-[family-name:var(--font-plus-jakarta)] text-lg font-black leading-tight text-slate-950">
+              {node.title}
+            </h3>
+            <span className={cn("rounded-full px-2.5 py-1 text-[11px] font-extrabold", styles.badge)}>
+              {node.status}
+            </span>
+          </div>
+          <p className="mt-2 text-sm leading-relaxed text-slate-600">{node.description}</p>
+          <div className="mt-4 flex items-center gap-2 text-sm font-extrabold">
+            <span>{disabled ? "Unlock by continuing" : "Open"}</span>
+            {!disabled && <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+
+  const className = cn(
+    "group relative w-full overflow-hidden rounded-2xl border bg-white/80 p-4 shadow-lg backdrop-blur-md transition-all duration-300 sm:p-5 md:w-[46%]",
+    styles.accent,
+    styles.glow,
+    disabled ? "cursor-not-allowed opacity-80" : "hover:-translate-y-1 hover:shadow-2xl",
+  );
+
+  if (disabled) {
+    return <div className={className}>{content}</div>;
+  }
+
+  return (
+    <Link href={node.href} className={className}>
+      {content}
+    </Link>
+  );
+}
 
 export function ExploreHub() {
   const router = useRouter();
-  const { user, signOut } = useAuth();
   const [profile, setProfile] = useState<GuestProfile | null>(null);
-  const [bookmarkedCareers, setBookmarkedCareers] = useState<string[]>([]);
-  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
-  const [loadingDashboard, setLoadingDashboard] = useState(false);
-  const [activeTab, setActiveTab] = useState<"experiences" | "dashboard">("experiences");
+  const [roleplayCompleted, setRoleplayCompleted] = useState(false);
+  const [recentActivity, setRecentActivity] = useState<RecentActivity[]>([]);
 
   const loadProfile = useCallback(() => {
     const data = getGuestProfile();
@@ -70,7 +326,10 @@ export function ExploreHub() {
       return;
     }
 
+    const roleplayHistory = readJson<unknown[]>("careerverse-roleplay-history", []);
     setProfile(data);
+    setRoleplayCompleted(roleplayHistory.length > 0);
+    setRecentActivity(getRecentActivity(data));
   }, [router]);
 
   useEffect(() => {
@@ -86,530 +345,113 @@ export function ExploreHub() {
     };
   }, [loadProfile]);
 
-  // Load Dashboard/Bookmarks Data from Supabase
-  useEffect(() => {
-    if (!user) return;
-    
-    setLoadingDashboard(true);
-    db.getDashboardData(user.id)
-      .then((data) => {
-        setDashboardData(data);
-        setBookmarkedCareers((data.bookmarks || []).map((b) => b.career_name));
-      })
-      .catch((err) => console.error("Error loading dashboard:", err))
-      .finally(() => setLoadingDashboard(false));
-  }, [user, activeTab]);
+  const journeyNodes = useMemo(() => {
+    if (!profile) return [];
+    return buildJourneyNodes(profile, roleplayCompleted);
+  }, [profile, roleplayCompleted]);
 
   if (!profile) {
     return null;
   }
 
-  const { scienceCompleted, sweCompleted, completedCount, bothComplete } =
-    getHubProgress(profile);
-  const remaining = 2 - completedCount;
-  const progressMessage =
-    completedCount === 0
-      ? "Start with either experience. Your insight unlocks after both are complete."
-      : completedCount === 1
-        ? "Nice progress. One more experience will make your comparison useful."
-        : "Both experiences are complete. Your insight is ready.";
-
-  function handleScienceStart() {
-    if (!profile!.scienceCompleted && profile!.scienceStatus === "not_started") {
-      const updated = setExperienceStatus("science", "in_progress");
-      setProfile(updated);
-    }
-  }
-
-  function handleSweStart() {
-    if (!profile!.sweCompleted && profile!.sweStatus === "not_started") {
-      const updated = setExperienceStatus("swe", "in_progress");
-      setProfile(updated);
-    }
-  }
-
-  const handleToggleBookmark = async (careerName: string, e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!user) return;
-
-    const isBookmarked = bookmarkedCareers.includes(careerName);
-    try {
-      if (isBookmarked) {
-        await db.removeBookmark(user.id, careerName);
-        setBookmarkedCareers((prev) => prev.filter((c) => c !== careerName));
-      } else {
-        await db.addBookmark(user.id, careerName);
-        setBookmarkedCareers((prev) => [...prev, careerName]);
-      }
-    } catch (err) {
-      console.error("Bookmark toggle failed:", err);
-    }
-  };
-
   return (
-    <div className="cv-section-gap pb-4">
-      {/* Header with Logout */}
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-10 pb-8">
       <MotionFadeIn>
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="text-sm font-semibold text-primary">CareerVerse</p>
-            <h1 className="cv-heading mt-1 text-2xl sm:text-3xl">Hi, {profile.firstName}</h1>
-            <p className="mt-1 text-xs text-muted-foreground">Grade {profile.grade}</p>
+        <section className="relative overflow-hidden rounded-[2rem] border border-white/70 bg-white/75 px-5 py-7 shadow-xl shadow-slate-200/60 backdrop-blur-xl sm:px-8 sm:py-9">
+          <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_20%_20%,rgba(56,189,248,0.20),transparent_30%),radial-gradient(circle_at_78%_8%,rgba(251,191,36,0.18),transparent_26%),linear-gradient(135deg,rgba(255,255,255,0.95),rgba(248,250,252,0.72))]" />
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+            <div className="max-w-2xl">
+              <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 py-1 text-xs font-bold text-slate-600 shadow-sm">
+                <GraduationCap className="h-3.5 w-3.5 text-primary" />
+                CareerVerse
+              </div>
+              <h1 className="mt-5 font-[family-name:var(--font-plus-jakarta)] text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">
+                Hi, {profile.firstName} ??
+              </h1>
+              <p className="mt-3 text-base font-medium text-slate-600 sm:text-lg">
+                Welcome back. Continue building your future.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-950 px-5 py-4 text-white shadow-lg">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-300">Next Focus</p>
+              <p className="mt-2 text-sm font-bold">
+                {journeyNodes.find((node) => node.state === "recommended")?.title || "Career Journey"}
+              </p>
+            </div>
           </div>
-          {user && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => signOut()}
-              className="flex items-center gap-1.5 h-9"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-              Sign Out
-            </Button>
-          )}
-        </div>
+        </section>
       </MotionFadeIn>
 
-      {/* Tabs Switcher */}
-      {user && (
-        <div className="flex border-b border-border my-2">
-          <button
-            type="button"
-            className={`flex-1 pb-2.5 text-sm font-semibold border-b-2 transition-all duration-200 ${
-              activeTab === "experiences"
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-            onClick={() => setActiveTab("experiences")}
-          >
-            Careers
-          </button>
-          <button
-            type="button"
-            className={`flex-1 pb-2.5 text-sm font-semibold border-b-2 transition-all duration-200 ${
-              activeTab === "dashboard"
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-            onClick={() => setActiveTab("dashboard")}
-          >
-            My Stats & DNA
-          </button>
-        </div>
-      )}
+      <section className="space-y-6">
+        <MotionFadeIn delay={0.05}>
+          <div>
+            <p className="text-sm font-bold text-primary">Career Journey</p>
+            <h2 className="mt-1 font-[family-name:var(--font-plus-jakarta)] text-2xl font-black tracking-tight text-slate-950">
+              Your path through CareerVerse
+            </h2>
+          </div>
+        </MotionFadeIn>
 
-      {activeTab === "experiences" ? (
-        <>
-          {/* Progress Ring */}
-          <MotionFadeIn delay={0.08}>
-            <div
-              className={cn(
-                "flex items-center gap-5 rounded-2xl border p-5 shadow-md transition-colors duration-300 sm:p-6",
-                bothComplete
-                  ? "border-emerald-500/30 bg-gradient-to-br from-emerald-500/5 to-card"
-                  : "border-border bg-card",
-              )}
-            >
-              <ProgressRing completed={completedCount} total={2} />
-              <div>
-                <p className="cv-heading text-base font-semibold sm:text-lg">
-                  {bothComplete ? "Both experiences complete!" : "Your exploration progress"}
-                </p>
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{progressMessage}</p>
-              </div>
-            </div>
-          </MotionFadeIn>
+        <MotionStagger className="relative mx-auto flex max-w-5xl flex-col gap-5 py-2">
+          {journeyNodes.map((node, index) => {
+            const styles = stateStyles[node.state];
+            const isLeft = index % 2 === 0;
 
-          <MotionFadeIn delay={0.1}>
-            <div
-              className={cn(
-                "rounded-2xl border p-4 shadow-sm transition-all duration-300",
-                completedCount === 0 && "border-primary/20 bg-primary/5",
-                completedCount === 1 && "border-amber-500/25 bg-amber-500/5",
-                completedCount === 2 && "border-emerald-500/25 bg-emerald-500/5 hub-success-pulse",
-              )}
-            >
-              <p className="text-sm font-semibold">
-                {completedCount === 0 && "No experiences completed yet"}
-                {completedCount === 1 && "One experience completed"}
-                {completedCount === 2 && "Insight unlocked"}
-              </p>
-              <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                {completedCount === 0 &&
-                  "Pick Science or Software Engineer to begin. There are no wrong answers here - just useful signals."}
-                {completedCount === 1 &&
-                  `You are ${remaining} experience away from seeing how your reactions compare.`}
-                {completedCount === 2 &&
-                  "The results page can now compare both reflections and turn them into a clear takeaway."}
-              </p>
-            </div>
-          </MotionFadeIn>
-
-          {/* Active Experiences */}
-          <div className="space-y-5">
-            <MotionFadeIn delay={0.12}>
-              <h2 className="cv-heading text-lg sm:text-xl">Experience your future</h2>
-            </MotionFadeIn>
-
-            <MotionStagger className="space-y-4">
-              <MotionStaggerItem className="relative">
-                <ExperienceCard
-                  title="Sample a Science Lesson"
-                  description="Find out what Science classes actually feel like — starting with Grade 11 Physics."
-                  meta="5 min · Physics · Interactive"
-                  href="/explore/science/intro"
-                  icon={FlaskConical}
-                  completed={scienceCompleted}
-                  status={profile.scienceStatus}
-                  accentClass="bg-gradient-to-r from-sky-400 to-sky-500"
-                  iconClass="bg-sky-500/10 text-sky-500"
-                  onStart={handleScienceStart}
-                  startLabel="Start Lesson"
-                  reviewLabel="Review Lesson"
-                />
-                {user && (
-                  <button
-                    onClick={(e) => handleToggleBookmark("science", e)}
-                    className="absolute right-6 top-10 z-20 p-2 rounded-full border border-border bg-background/80 hover:bg-background transition-colors text-muted-foreground hover:text-foreground"
-                    title={bookmarkedCareers.includes("science") ? "Remove Bookmark" : "Bookmark Career"}
-                  >
-                    {bookmarkedCareers.includes("science") ? (
-                      <BookmarkCheck className="h-4.5 w-4.5 text-primary fill-primary" />
-                    ) : (
-                      <Bookmark className="h-4.5 w-4.5" />
+            return (
+              <MotionStaggerItem key={node.title} className="relative">
+                {index < journeyNodes.length - 1 && (
+                  <div
+                    className={cn(
+                      "pointer-events-none absolute left-1/2 top-[calc(100%-0.25rem)] hidden h-12 w-[34%] -translate-x-1/2 md:block",
+                      isLeft ? "rounded-br-[4rem] border-b-2 border-r-2" : "rounded-bl-[4rem] border-b-2 border-l-2",
+                      "border-slate-200",
                     )}
-                  </button>
-                )}
-              </MotionStaggerItem>
-
-              <MotionStaggerItem className="relative">
-                <ExperienceCard
-                  title="Simulate: Software Engineer"
-                  description="Make real workplace decisions — standups, bugs, and tradeoffs — not just coding."
-                  meta="5 min · 3 workplace moments"
-                  href="/explore/software-engineer/intro"
-                  icon={Code2}
-                  completed={sweCompleted}
-                  status={profile.sweStatus}
-                  accentClass="bg-gradient-to-r from-emerald-400 to-emerald-500"
-                  iconClass="bg-emerald-500/10 text-emerald-500"
-                  onStart={handleSweStart}
-                  startLabel="Start Simulation"
-                  reviewLabel="Review Simulation"
-                />
-                {user && (
-                  <button
-                    onClick={(e) => handleToggleBookmark("software-engineer", e)}
-                    className="absolute right-6 top-10 z-20 p-2 rounded-full border border-border bg-background/80 hover:bg-background transition-colors text-muted-foreground hover:text-foreground"
-                    title={bookmarkedCareers.includes("software-engineer") ? "Remove Bookmark" : "Bookmark Career"}
                   >
-                    {bookmarkedCareers.includes("software-engineer") ? (
-                      <BookmarkCheck className="h-4.5 w-4.5 text-primary fill-primary" />
-                    ) : (
-                      <Bookmark className="h-4.5 w-4.5" />
-                    )}
-                  </button>
-                )}
-              </MotionStaggerItem>
-
-              {/* AI Career Coach active link */}
-              <MotionStaggerItem>
-                <Link
-                  href="/explore/ai-mentor"
-                  className="group block overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/5 via-violet-500/5 to-card p-5 sm:p-6 shadow-sm hover:shadow-md hover:border-primary/45 transition-all duration-300"
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary shadow-sm">
-                      <Bot className="h-5 w-5" />
-                    </div>
-                    <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
-                      Active AI Coach
-                    </span>
+                    <div className={cn("h-full w-full bg-gradient-to-b opacity-40", styles.line)} />
                   </div>
-                  <h3 className="mt-5 font-[family-name:var(--font-plus-jakarta)] text-lg font-semibold leading-snug">
-                    AI Career Coach
-                  </h3>
-                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                    A personalized conversational coach to compare streams, ask questions, and build your Career DNA memory.
-                  </p>
-                  <div className="mt-5 flex items-center justify-between border-t border-border/80 pt-4 text-primary font-semibold text-sm">
-                    <span>Chat with Coach</span>
-                    <Sparkles className="h-4 w-4" />
+                )}
+
+                <div className={cn("flex w-full", isLeft ? "justify-start" : "justify-end")}>
+                  <JourneyCard node={node} />
+                </div>
+              </MotionStaggerItem>
+            );
+          })}
+        </MotionStagger>
+      </section>
+
+      <MotionFadeIn delay={0.18}>
+        <section className="space-y-4">
+          <div>
+            <p className="text-sm font-bold text-primary">Continue where you left off</p>
+            <h2 className="mt-1 font-[family-name:var(--font-plus-jakarta)] text-xl font-black tracking-tight text-slate-950">
+              Recent activity
+            </h2>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            {recentActivity.map((item) => {
+              const Icon = item.icon;
+              return (
+                <Link
+                  key={item.label}
+                  href={item.href}
+                  className="group rounded-2xl border border-slate-200 bg-white/75 p-4 shadow-sm backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-lg"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white">
+                      <Icon className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">{item.label}</p>
+                      <p className="mt-1 truncate text-sm font-black capitalize text-slate-950">{item.title}</p>
+                    </div>
                   </div>
                 </Link>
-              </MotionStaggerItem>
-            </MotionStagger>
+              );
+            })}
           </div>
-
-          {/* Unlocked Insight Callout */}
-          {bothComplete ? (
-            <MotionFadeIn delay={0.2}>
-              <motion.div
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-                className="overflow-hidden rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/10 via-violet-500/5 to-transparent p-6 shadow-lg shadow-primary/10"
-              >
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
-                  <motion.div
-                    animate={{ rotate: [0, 8, -8, 0] }}
-                    transition={{ duration: 2, repeat: Infinity, repeatDelay: 3 }}
-                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary"
-                  >
-                    <Sparkles className="h-6 w-6" />
-                  </motion.div>
-                  <div className="flex-1">
-                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-semibold text-emerald-600">
-                      <Sparkles className="h-3 w-3" />
-                      Unlocked
-                    </span>
-                    <h3 className="cv-heading mt-2 text-lg">Your Insight</h3>
-                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                      See how your Science and Software Engineer experiences compare — and what they
-                      reveal about your fit.
-                    </p>
-                    <Button asChild className="mt-5 w-full sm:w-auto">
-                      <Link href="/results">
-                        View My Insight
-                        <Sparkles className="h-4 w-4" />
-                      </Link>
-                    </Button>
-                  </div>
-                </div>
-              </motion.div>
-            </MotionFadeIn>
-          ) : (
-            <MotionFadeIn delay={0.2}>
-              <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-6">
-                <div className="flex items-start gap-4 opacity-70">
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted">
-                    <Lock className="h-5 w-5 text-muted-foreground" />
-                  </div>
-                  <div>
-                    <h3 className="cv-heading text-lg text-muted-foreground">Your Insight</h3>
-                    <p className="mt-2 text-sm text-muted-foreground">
-                      Complete both experiences to unlock your personalized insight.
-                    </p>
-                  </div>
-                </div>
-                <Button disabled className="mt-5 w-full" variant="outline">
-                  <Lock className="mr-2 h-4 w-4" />
-                  Locked — {completedCount}/2 complete
-                </Button>
-              </div>
-            </MotionFadeIn>
-          )}
-
-          {/* More Paths */}
-          <div className="space-y-5">
-            <MotionFadeIn delay={0.22}>
-              <h2 className="cv-heading text-lg sm:text-xl">More paths coming soon</h2>
-            </MotionFadeIn>
-
-            <MotionStagger className="grid gap-3 sm:grid-cols-2">
-              {comingSoonCards.map((item) => (
-                <MotionStaggerItem key={item.title}>
-                  <motion.div
-                    whileHover={{ y: -3 }}
-                    transition={{ duration: 0.2 }}
-                    className="h-full rounded-2xl border border-border/80 bg-card p-5 opacity-90 shadow-sm transition-shadow duration-300 hover:shadow-md"
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
-                        <item.icon className="h-5 w-5" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="font-[family-name:var(--font-plus-jakarta)] text-sm font-semibold">
-                            {item.title}
-                          </h3>
-                          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
-                            Coming Soon
-                          </span>
-                        </div>
-                        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                          {item.description}
-                        </p>
-                      </div>
-                    </div>
-                  </motion.div>
-                </MotionStaggerItem>
-              ))}
-            </MotionStagger>
-          </div>
-        </>
-      ) : (
-        /* Stats & DNA Tab */
-        <div className="space-y-6">
-          {loadingDashboard ? (
-            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-              <Bot className="h-8 w-8 animate-bounce mb-3 text-primary" />
-              <p className="text-sm">Fetching your DNA and Achievements...</p>
-            </div>
-          ) : dashboardData ? (
-            <MotionStagger className="space-y-6">
-              {/* Level & XP card */}
-              <MotionStaggerItem>
-                <div className="cv-card-elevated p-5 bg-gradient-to-br from-primary/10 to-card">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Level Progress</p>
-                      <h3 className="text-xl font-bold font-[family-name:var(--font-plus-jakarta)] mt-1">
-                        Explorer Level {Math.floor(dashboardData.xp / 100) + 1}
-                      </h3>
-                    </div>
-                    <Trophy className="h-8 w-8 text-yellow-500" />
-                  </div>
-                  <div className="mt-4">
-                    <div className="flex justify-between text-xs text-muted-foreground mb-1">
-                      <span>{dashboardData.xp % 100} / 100 XP</span>
-                      <span>Next Level</span>
-                    </div>
-                    <div className="h-2.5 w-full bg-muted rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-primary rounded-full transition-all duration-500"
-                        style={{ width: `${dashboardData.xp % 100}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </MotionStaggerItem>
-
-              {/* Career DNA values */}
-              {dashboardData.careerDna && (
-                <MotionStaggerItem>
-                  <div className="cv-card p-5">
-                    <h3 className="font-[family-name:var(--font-plus-jakarta)] font-bold text-lg mb-3 flex items-center gap-1.5">
-                      <Award className="h-5 w-5 text-primary" />
-                      Your Career DNA Archetype: <span className="text-primary">{dashboardData.careerDna.archetype}</span>
-                    </h3>
-                    <p className="text-xs text-muted-foreground mb-4">
-                      Based on your simulation decisions, standup updates, and bug investigation style.
-                    </p>
-                    <div className="space-y-3">
-                      {[
-                        { name: "Analytical Depth", val: dashboardData.careerDna.analytical },
-                        { name: "Creative Problem Solving", val: dashboardData.careerDna.creativity },
-                        { name: "Team Collaboration", val: dashboardData.careerDna.collaboration },
-                        { name: "Risk Tolerance", val: dashboardData.careerDna.risk_tolerance },
-                      ].map((dna) => (
-                        <div key={dna.name} className="space-y-1.5">
-                          <div className="flex justify-between text-xs font-semibold">
-                            <span>{dna.name}</span>
-                            <span>{dna.val * 10}%</span>
-                          </div>
-                          <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-gradient-to-r from-primary to-violet-500 rounded-full"
-                              style={{ width: `${dna.val * 10}%` }}
-                            />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </MotionStaggerItem>
-              )}
-
-              {/* Achievements Section */}
-              <MotionStaggerItem>
-                <div className="cv-card p-5">
-                  <h3 className="font-[family-name:var(--font-plus-jakarta)] font-bold text-lg mb-3">
-                    Unlocked Achievements ({dashboardData.achievements.length})
-                  </h3>
-                  {dashboardData.achievements.length === 0 ? (
-                    <p className="text-sm text-muted-foreground py-4 text-center">No achievements unlocked yet. Finish experiences to unlock badges!</p>
-                  ) : (
-                    <div className="flex flex-wrap gap-2.5">
-                      {dashboardData.achievements.includes("science_pioneer") && (
-                        <span className="inline-flex items-center gap-1.5 rounded-xl border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700">
-                          <FlaskConical className="h-3.5 w-3.5" />
-                          Science Pioneer
-                        </span>
-                      )}
-                      {dashboardData.achievements.includes("swe_explorer") && (
-                        <span className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">
-                          <Code2 className="h-3.5 w-3.5" />
-                          SWE Explorer
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </MotionStaggerItem>
-
-              {/* Bookmarked Careers List */}
-              <MotionStaggerItem>
-                <div className="cv-card p-5">
-                  <h3 className="font-[family-name:var(--font-plus-jakarta)] font-bold text-lg mb-3">
-                    Bookmarked Careers ({bookmarkedCareers.length})
-                  </h3>
-                  {bookmarkedCareers.length === 0 ? (
-                    <p className="text-sm text-muted-foreground py-4 text-center">No careers bookmarked yet.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {bookmarkedCareers.map((bm) => {
-                        const isScience = bm === "science";
-                        return (
-                          <div key={bm} className="flex items-center justify-between p-3 rounded-xl border border-border bg-background">
-                            <div className="flex items-center gap-2">
-                              {isScience ? <FlaskConical className="h-4 w-4 text-sky-500" /> : <Code2 className="h-4 w-4 text-emerald-500" />}
-                              <span className="text-sm font-semibold capitalize">{bm.replace("-", " ")}</span>
-                            </div>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => handleToggleBookmark(bm, e)}
-                              className="h-8 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
-                            >
-                              Remove
-                            </Button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </MotionStaggerItem>
-
-              {/* Recent Activity / Journal Reflections */}
-              <MotionStaggerItem>
-                <div className="cv-card p-5">
-                  <h3 className="font-[family-name:var(--font-plus-jakarta)] font-bold text-lg mb-3 flex items-center gap-1.5">
-                    <Activity className="h-5 w-5 text-primary" />
-                    Recent Journal Activities
-                  </h3>
-                  {dashboardData.journalEntries.length === 0 ? (
-                    <p className="text-sm text-muted-foreground py-4 text-center">No journal logs or reflections saved yet. Finish a simulation to write your thoughts.</p>
-                  ) : (
-                    <div className="space-y-3">
-                      {dashboardData.journalEntries.slice(0, 3).map((entry, idx) => (
-                        <div key={entry.id || idx} className="p-3.5 rounded-xl border border-border bg-background space-y-1.5">
-                          <div className="flex justify-between items-center text-xs">
-                            <span className="font-semibold text-primary capitalize flex items-center gap-1">
-                              <BookOpen className="h-3 w-3" />
-                              {entry.career_reference.replace("-", " ")} Reflection
-                            </span>
-                            <span className="text-muted-foreground">
-                              {entry.created_at ? new Date(entry.created_at).toLocaleDateString() : ""}
-                            </span>
-                          </div>
-                          <p className="text-sm text-muted-foreground leading-relaxed">
-                            &ldquo;{entry.reflection_text}&rdquo;
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </MotionStaggerItem>
-            </MotionStagger>
-          ) : (
-            <p className="text-sm text-muted-foreground text-center py-10">Unable to load dashboard. Please try again.</p>
-          )}
-        </div>
-      )}
+        </section>
+      </MotionFadeIn>
     </div>
   );
 }
