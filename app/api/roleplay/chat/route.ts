@@ -35,6 +35,14 @@ function findJsonObjectBoundary(str: string): number {
   return -1;
 }
 
+function getFriendlyError(status: number, errorText: string): string {
+  const textLower = errorText.toLowerCase();
+  if (status === 404 || textLower.includes("model") || textLower.includes("not found") || textLower.includes("not_found") || textLower.includes("unavailable")) {
+    return "Gemini model unavailable";
+  }
+  return errorText || "Gemini API call failed";
+}
+
 // Robust fetch helper with retry and model fallback
 async function callGeminiWithRetry(
   apiKey: string,
@@ -70,7 +78,9 @@ async function callGeminiWithRetry(
 
     try {
       if (process.env.NODE_ENV === "development") {
-        console.log(`[Gemini API] Requesting ${currentModel} (${method}) - Attempt ${attempt + 1}...`);
+        console.log(`[Gemini API DEBUG] Route called: /api/roleplay/chat`);
+        console.log(`[Gemini API DEBUG] GEMINI_API_KEY loaded: ${apiKey ? "YES" : "NO"}`);
+        console.log(`[Gemini API DEBUG] Model requested: ${currentModel} (${method}) - Attempt ${attempt + 1}...`);
       }
 
       response = await fetch(endpoint, {
@@ -90,9 +100,10 @@ async function callGeminiWithRetry(
       lastError = new Error(`HTTP ${status}: ${errText}`);
 
       if (process.env.NODE_ENV === "development") {
-        console.warn(
-          `[Gemini API] Attempt ${attempt + 1} failed with status ${status}. Error: ${errText.slice(0, 150)}`
-        );
+        console.error(`[Gemini API DEBUG] Route called: /api/roleplay/chat`);
+        console.error(`[Gemini API DEBUG] Model requested: ${currentModel}`);
+        console.error(`[Gemini API DEBUG] Response Status Code: ${status}`);
+        console.error(`[Gemini API DEBUG] Exact Gemini error message: ${errText}`);
       }
 
       // Retry on 500, 502, 503, 504
@@ -107,7 +118,7 @@ async function callGeminiWithRetry(
     } catch (err: any) {
       lastError = err;
       if (process.env.NODE_ENV === "development") {
-        console.warn(`[Gemini API] Attempt ${attempt + 1} network/timeout error:`, err);
+        console.error(`[Gemini API DEBUG] Attempt ${attempt + 1} network/timeout error:`, err);
       }
       if (attempt < 2) {
         await new Promise((resolve) => setTimeout(resolve, delay));
@@ -127,9 +138,16 @@ export async function POST(req: Request) {
     const { career, scenario, message, history, profile, isFeedback, stats } = await req.json();
 
     const apiKey = process.env.GEMINI_API_KEY;
+    if (process.env.NODE_ENV === "development") {
+      console.log(`[Gemini API DEBUG] Route called: /api/roleplay/chat`);
+      console.log(`[Gemini API DEBUG] GEMINI_API_KEY loaded: ${apiKey ? "YES" : "NO"}`);
+    }
     if (!apiKey) {
+      if (process.env.NODE_ENV === "development") {
+        console.error(`[Gemini API DEBUG] Error: Gemini API key not found`);
+      }
       return NextResponse.json(
-        { error: "Gemini API key not configured on server." },
+        { error: "Gemini API key not found" },
         { status: 500 }
       );
     }
@@ -203,8 +221,10 @@ export async function POST(req: Request) {
         if (!response.ok) {
           const status = response.status;
           const errorText = await response.text();
-          console.error(`[Gemini API Feedback Error] Status: ${status}`, errorText);
-          return NextResponse.json({ error: "Gemini API feedback call failed" }, { status });
+          if (process.env.NODE_ENV === "development") {
+            console.error(`[Gemini API DEBUG] Feedback request failed. Status: ${status}. Error: ${errorText}`);
+          }
+          return NextResponse.json({ error: getFriendlyError(status, errorText) }, { status });
         }
 
         const data = await response.json();
@@ -303,8 +323,10 @@ export async function POST(req: Request) {
     if (!response.ok) {
       const status = response.status;
       const errorText = await response.text();
-      console.error(`[Gemini API Dialogue Error] Status: ${status}`, errorText);
-      return NextResponse.json({ error: errorText || "Gemini API call failed" }, { status });
+      if (process.env.NODE_ENV === "development") {
+        console.error(`[Gemini API DEBUG] Dialogue request failed. Status: ${status}. Error: ${errorText}`);
+      }
+      return NextResponse.json({ error: getFriendlyError(status, errorText) }, { status });
     }
 
     const encoder = new TextEncoder();

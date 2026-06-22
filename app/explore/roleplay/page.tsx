@@ -816,11 +816,13 @@ export default function VoiceRoleplayPage() {
       clearTimeout(timeoutId);
       setIsFallbackMode(true);
       
-      let errorDisplay = "AI is temporarily unavailable. Continuing with fallback roleplay.";
+      let errorDisplay = `AI is temporarily unavailable (${e.message || "Unknown error"}). Continuing with fallback roleplay.`;
       if (isTimeout) {
         errorDisplay = "AI response timed out (20s limit reached). Continuing with fallback roleplay.";
-      } else if (e.message?.includes("key not configured") || e.message?.includes("API key")) {
-        errorDisplay = "AI key not configured on server. Continuing with fallback roleplay.";
+      } else if (e.message?.includes("API key not found") || e.message?.includes("key not configured") || e.message?.includes("API key")) {
+        errorDisplay = "Gemini API key not found. Please check your configuration.";
+      } else if (e.message?.includes("model unavailable") || e.message?.includes("Model")) {
+        errorDisplay = "Gemini model unavailable. Please try again later.";
       }
       setConfigError(errorDisplay);
 
@@ -1035,9 +1037,11 @@ export default function VoiceRoleplayPage() {
       }
     } catch (e: any) {
       setIsFallbackMode(true);
-      let errorDisplay = "AI feedback generation is temporarily unavailable. Generating local fallback report.";
-      if (e.message?.includes("key not configured") || e.message?.includes("API key")) {
-        errorDisplay = "AI key not configured on server. Generating local fallback report.";
+      let errorDisplay = `AI feedback generation is temporarily unavailable (${e.message || "Unknown error"}). Generating local fallback report.`;
+      if (e.message?.includes("API key not found") || e.message?.includes("key not configured") || e.message?.includes("API key")) {
+        errorDisplay = "Gemini API key not found. Generating local fallback report.";
+      } else if (e.message?.includes("model unavailable") || e.message?.includes("Model")) {
+        errorDisplay = "Gemini model unavailable. Generating local fallback report.";
       }
       setConfigError(errorDisplay);
 
