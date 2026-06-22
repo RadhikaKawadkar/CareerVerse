@@ -2,173 +2,154 @@ import { NextResponse } from "next/server";
 
 export const runtime = "edge";
 
-function findJsonObjectBoundary(str: string): number {
-  let braceCount = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = 0; i < str.length; i++) {
-    const char = str[i];
-    if (escape) {
-      escape = false;
-      continue;
-    }
-    if (char === "\\") {
-      escape = true;
-      continue;
-    }
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (!inString) {
-      if (char === "{") {
-        braceCount++;
-      } else if (char === "}") {
-        braceCount--;
-        if (braceCount === 0) {
-          return i;
-        }
-      }
-    }
-  }
-  return -1;
+type ChatHistoryItem = {
+  role?: string;
+  text?: string;
+  content?: string;
+};
+
+type GeminiResponse = {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string;
+      }>;
+    };
+  }>;
+  error?: {
+    message?: string;
+  };
+};
+
+function cleanStringList(value: unknown): string {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string").slice(0, 10).join(", ")
+    : "";
+}
+
+function extractGeminiText(data: GeminiResponse): string {
+  return (data.candidates?.[0]?.content?.parts || [])
+    .map((part) => part.text || "")
+    .join("")
+    .trim();
 }
 
 export async function POST(req: Request) {
   try {
-    const { message, history, mentor, profile } = await req.json();
+    const body = await req.json();
+    const message = typeof body.message === "string" ? body.message.trim() : "";
+    const history = Array.isArray(body.history) ? (body.history as ChatHistoryItem[]) : [];
+    const mentor = body.mentor || {};
+    const profile = body.profile || {};
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    if (!message) {
+      return NextResponse.json({ error: "Please enter a message." }, { status: 400 });
+    }
+
+    const apiKey =
+      process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+
     if (!apiKey) {
       return NextResponse.json(
-        { error: "Gemini API key not configured on server." },
+        { error: "Gemini API key not configured. Add GEMINI_API_KEY to .env.local." },
         { status: 500 }
       );
     }
 
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?key=${apiKey}`;
+    const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+    const mentorName = typeof mentor.name === "string" ? mentor.name : "AI Career Coach";
+    const mentorDescription =
+      typeof mentor.description === "string" ? mentor.description : "general career guidance";
 
     const systemInstruction = `
-      You are the CareerVerse AI Mentor persona named ${mentor?.name || "AI Coach"}, who works as a ${
-        mentor?.role || "Specialist"
-      } at ${mentor?.organization || "CareerVerse"}.
-      Your background: ${mentor?.journey || ""}
-      
-      You are guiding a high school student named ${profile.name || "Student"} (Grade ${profile.grade || 10}).
-      Student Career DNA Profile:
-      - Work Style: ${profile.dna?.workStyle || "Balanced"}
-      - Analytical Index: ${profile.dna?.analytical || 50}%
-      - Creativity Index: ${profile.dna?.creativity || 50}%
-      - Completed Simulations: ${profile.completedSimulations?.join(", ") || "None"}
-      - Active Goals/Quests: ${profile.goals?.join(", ") || "None"}
-      - Interests: ${profile.interests?.join(", ") || "None"}
-      - Favorite Careers: ${profile.favoriteCareers?.join(", ") || "None"}
-      - Journal Reflections: ${profile.journalReflections?.map((r: { careerId: string; excited: string; difficult: string; surprised: string }) => `Career: ${r.careerId}, Excited: ${r.excited}, Difficult: ${r.difficult}, Surprised: ${r.surprised}`).join(" | ") || "None"}
-      
-      Respond directly as the persona, utilizing your career expertise. Speak like a supportive, startup-ready mentor. Give concise, actionable advice under 180 words. Reference their completed simulations, Career DNA, favorite careers, and journal reflections when relevant to make the feedback feel deeply personalized and demonstrate you know them.
-    `;
+You are ${mentorName}, a supportive CareerVerse mentor specializing in ${mentorDescription}.
+You are helping a high-school student explore careers and education.
 
-    const contents: { role: string; parts: { text: string }[] }[] = [];
-    if (history && history.length > 0) {
-      contents.push(
-        ...history.map((h: { role: string; text: string }) => ({
-          role: h.role === "user" ? "user" : "model",
-          parts: [{ text: h.text }],
-        }))
-      );
+Student context:
+- Name: ${typeof profile.name === "string" ? profile.name : "Student"}
+- Grade: ${profile.grade || 10}
+- Interests: ${cleanStringList(profile.interests) || "Not provided"}
+- Favorite careers: ${cleanStringList(profile.favoriteCareers) || "Not provided"}
+- Completed simulations: ${cleanStringList(profile.completedSimulations) || "None"}
+
+Answer the student's actual question directly using your general knowledge. Be warm, clear, practical,
+and concise (normally under 220 words), but give enough detail to be useful. Ask at most one relevant
+follow-up question. Do not pretend to know personal facts that were not provided. For medical, legal,
+financial, or other high-stakes questions, provide general educational information and recommend
+checking with a qualified adult or professional when appropriate.
+    `.trim();
+
+    const contents = history
+      .slice(-20)
+      .map((item) => {
+        const text =
+          typeof item.content === "string"
+            ? item.content
+            : typeof item.text === "string"
+              ? item.text
+              : "";
+
+        return {
+          role: item.role === "assistant" || item.role === "model" ? "model" : "user",
+          parts: [{ text }],
+        };
+      })
+      .filter((item) => item.parts[0].text.trim().length > 0);
+
+    const lastContent = contents[contents.length - 1];
+    if (
+      !lastContent ||
+      lastContent.role !== "user" ||
+      lastContent.parts[0].text !== message
+    ) {
+      contents.push({
+        role: "user",
+        parts: [{ text: message }],
+      });
     }
 
-    contents.push({
-      role: "user",
-      parts: [{ text: message }],
-    });
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          system_instruction: {
+            parts: [{ text: systemInstruction }],
+          },
+          contents,
+          generationConfig: {
+            maxOutputTokens: 700,
+          },
+        }),
+      }
+    );
 
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contents,
-        systemInstruction: {
-          parts: [{ text: systemInstruction }],
-        },
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 800,
-        },
-      }),
-    });
+    const data = (await response.json().catch(() => ({}))) as GeminiResponse;
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Gemini API call failed", errorText);
+      const providerMessage =
+        data.error?.message || `Gemini request failed with status ${response.status}.`;
+      console.error("Gemini API error:", providerMessage);
+      return NextResponse.json({ error: providerMessage }, { status: response.status });
+    }
+
+    const text = extractGeminiText(data);
+    if (!text) {
       return NextResponse.json(
-        { error: "Gemini API call failed" },
-        { status: response.status }
+        { error: "Gemini returned an empty response. Please try again." },
+        { status: 502 }
       );
     }
 
-    const encoder = new TextEncoder();
-    const decoder = new TextDecoder();
-    const reader = response.body?.getReader();
-
-    const stream = new ReadableStream({
-      async start(controller) {
-        let buffer = "";
-        try {
-          while (true) {
-            const { done, value } = await reader!.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            
-            let pos;
-            while ((pos = findJsonObjectBoundary(buffer)) !== -1) {
-              const part = buffer.slice(0, pos + 1);
-              buffer = buffer.slice(pos + 1);
-              
-              let cleanPart = part.trim();
-              if (cleanPart.startsWith("[")) cleanPart = cleanPart.slice(1).trim();
-              if (cleanPart.startsWith(",")) cleanPart = cleanPart.slice(1).trim();
-              if (cleanPart.endsWith("]")) cleanPart = cleanPart.slice(0, -1).trim();
-              
-              if (cleanPart) {
-                try {
-                  const parsed = JSON.parse(cleanPart);
-                  const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
-                  if (text) {
-                    controller.enqueue(encoder.encode(text));
-                  }
-                } catch {
-                  // Prepend back if it's incomplete
-                  buffer = part + buffer;
-                  break;
-                }
-              }
-            }
-          }
-        } catch (e) {
-          controller.error(e);
-        } finally {
-          controller.close();
-        }
-      }
-    });
-
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-      },
-    });
-
-  } catch (err: unknown) {
-    console.error("Edge Route Error:", err);
-    const errMsg = err instanceof Error ? err.message : "Internal server error";
+    return NextResponse.json({ text });
+  } catch (error) {
+    console.error("Gemini coaching route error:", error);
     return NextResponse.json(
-      { error: errMsg },
+      { error: error instanceof Error ? error.message : "Internal server error" },
       { status: 500 }
     );
   }

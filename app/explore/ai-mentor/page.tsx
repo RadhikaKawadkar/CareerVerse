@@ -8,6 +8,7 @@ import { Send, Bot, Sparkles, Brain, ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import Link from "next/link";
+import { getUnifiedProfileV12 } from "@/lib/global-state";
 
 type Message = {
   role: "user" | "assistant" | "system";
@@ -28,12 +29,20 @@ export default function AiMentorPage() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [initializing, setInitializing] = useState(true);
+  const [error, setError] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Load conversation memory from database on mount or mentor type change
   useEffect(() => {
     async function loadMemory() {
       if (!user) {
+        setMessages([
+          {
+            role: "assistant",
+            content: getWelcomeMessage(selectedMentor),
+            timestamp: new Date().toISOString(),
+          },
+        ]);
         setInitializing(false);
         return;
       }
@@ -77,31 +86,6 @@ export default function AiMentorPage() {
     }
   };
 
-  const generateMentorResponse = (userMsg: string, mentorId: string): string => {
-    const text = userMsg.toLowerCase();
-    
-    // Custom responses based on simulation progress
-    if (text.includes("standup") || text.includes("software") || text.includes("developer")) {
-      return "Software engineering is more than just writing code. It involves active collaboration (like standups), finding and fixing bugs methodically, and making tough product tradeoffs when deadlines loom. How did you feel about making those choices in the simulation?";
-    }
-    if (text.includes("physics") || text.includes("science") || text.includes("lesson")) {
-      return "Physics and pure science require strong observation, critical thinking, and hypothesis testing. Unlike SWE, science often focuses on discovering laws of nature rather than building tools. Do you enjoy theoretical learning or practical building more?";
-    }
-    if (text.includes("help") || text.includes("stuck")) {
-      return "In both science and tech careers, getting stuck is normal! In SWE, asking your team for help early is a strength, not a weakness. In science, peer review and academic collaboration help solve complex problems. What specifically is on your mind?";
-    }
-    
-    // Default responses
-    switch (mentorId) {
-      case "tech":
-        return "Building software is all about iterative learning and problem-solving. If you enjoyed the software engineering simulation, I highly recommend exploring Python or JavaScript by building a small project. What kinds of projects interest you?";
-      case "science":
-        return "Pure sciences lead to research, engineering, astronomy, and many analytical fields. It requires deep curiosity. How did you perform on the Physics quiz? Did you find the formula derivations intuitive?";
-      default:
-        return "The best way to choose a career is through experiments. You sampled Physics and simulated a developer's day. Based on your rating comparison, which one felt more like 'play' rather than 'work' for you?";
-    }
-  };
-
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || loading) return;
@@ -116,20 +100,48 @@ export default function AiMentorPage() {
     setMessages(nextMessages);
     setInput("");
     setLoading(true);
+    setError("");
 
-    // Mock API call delay
-    setTimeout(async () => {
+    try {
+      const mentor = MENTOR_TYPES.find((item) => item.id === selectedMentor);
+      const profile = getUnifiedProfileV12();
+      const response = await fetch("/api/coaching/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: userMessage.content,
+          history: nextMessages.map((item) => ({
+            role: item.role,
+            content: item.content,
+          })),
+          mentor: {
+            name: mentor?.name,
+            description: mentor?.desc,
+          },
+          profile: {
+            name: profile.name,
+            grade: profile.grade,
+            interests: profile.interests,
+            favoriteCareers: profile.favoriteCareers,
+            completedSimulations: profile.completedSimulations,
+          },
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "The AI coach could not answer right now.");
+      }
+
       const assistantMessage: Message = {
         role: "assistant",
-        content: generateMentorResponse(userMessage.content, selectedMentor),
+        content: data.text,
         timestamp: new Date().toISOString(),
       };
 
       const finalMessages = [...nextMessages, assistantMessage];
       setMessages(finalMessages);
-      setLoading(false);
 
-      // Save to Supabase
       if (user) {
         try {
           await db.upsertAiMentorMemory(user.id, selectedMentor, finalMessages);
@@ -137,7 +149,11 @@ export default function AiMentorPage() {
           console.error("Failed to save memory to Supabase:", err);
         }
       }
-    }, 1000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "The AI coach could not answer right now.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -237,18 +253,21 @@ export default function AiMentorPage() {
         </div>
 
         {/* Input Bar */}
-        <form onSubmit={handleSend} className="p-3 border-t border-border bg-background flex gap-2">
-          <Input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={`Ask the ${MENTOR_TYPES.find(m => m.id === selectedMentor)?.name.split(" ")[0]} Coach...`}
-            disabled={initializing || loading}
-            className="flex-1"
-          />
-          <Button type="submit" size="sm" disabled={initializing || loading || !input.trim()}>
-            <Send className="h-4 w-4" />
-          </Button>
-        </form>
+        <div className="border-t border-border bg-background">
+          {error && <p className="px-3 pt-2 text-xs text-destructive">{error}</p>}
+          <form onSubmit={handleSend} className="p-3 flex gap-2">
+            <Input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={`Ask the ${MENTOR_TYPES.find(m => m.id === selectedMentor)?.name.split(" ")[0]} Coach...`}
+              disabled={initializing || loading}
+              className="flex-1"
+            />
+            <Button type="submit" size="sm" disabled={initializing || loading || !input.trim()}>
+              <Send className="h-4 w-4" />
+            </Button>
+          </form>
+        </div>
       </div>
     </div>
   );
