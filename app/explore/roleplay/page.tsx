@@ -670,24 +670,36 @@ export default function VoiceRoleplayPage() {
       if (cleanMsg.includes("evidence") || cleanMsg.includes("proof") || cleanMsg.includes("alibi")) {
         return "The Court notes your reference to the evidence. But counselor, the security footage is clear. How do you explain your client's flight response when the alarm sounded?";
       }
-      if (cleanMsg.includes("flight") || cleanMsg.includes("ran") || cleanMsg.includes("scared")) {
+      if (cleanMsg.includes("flight") || cleanMsg.includes("ran") || cleanMsg.includes("scared") || cleanMsg.includes("panic")) {
         return "An innocent person has no reason to run. The court remains skeptical of this explanation. Please summarize your final defense argument counselor.";
       }
-      return `You argued: "${userMsg}". How does this address the main charge of trespass and felony theft? Explain your reasoning counselor.`;
+      if (cleanMsg.includes("trespass") || cleanMsg.includes("theft") || cleanMsg.includes("stole") || cleanMsg.includes("stolen")) {
+        return "The charges of trespass and felony theft are supported by the silent alarm log. How does your argument refute the timestamped entry logs, counselor?";
+      }
+      if (cleanMsg.includes("witness") || cleanMsg.includes("testimony") || cleanMsg.includes("statement")) {
+        return "The witness testimony has been sworn and recorded. Counselor, point out any specific contradictions in their timeline that support your client.";
+      }
+      return `Counselor, you argued: "${userMsg}". Address the court directly on how this specific point refutes the state's prime evidence.`;
     } else {
-      if (cleanMsg.includes("pain") || cleanMsg.includes("constriction") || cleanMsg.includes("hurt")) {
+      if (cleanMsg.includes("pain") || cleanMsg.includes("constriction") || cleanMsg.includes("hurt") || cleanMsg.includes("sensation")) {
         return "Yes, doctor. It is a squeezing, heavy weight right in my chest. It doesn't get better when I rest, and I feel quite sweaty. Do you think this is a heart issue?";
       }
-      if (cleanMsg.includes("family") || cleanMsg.includes("father") || cleanMsg.includes("history")) {
+      if (cleanMsg.includes("family") || cleanMsg.includes("father") || cleanMsg.includes("history") || cleanMsg.includes("parents")) {
         return "My father actually had heart surgery when he was fifty. That's why I'm so worried, doctor. What is your initial diagnosis?";
       }
       if (cleanMsg.includes("diagnose") || cleanMsg.includes("think") || cleanMsg.includes("angina") || cleanMsg.includes("heart")) {
         return "Angina... wow, that sounds scary. What tests do I need to confirm this, and should I go to the emergency room if the pain returns tonight?";
       }
-      if (cleanMsg.includes("emergency") || cleanMsg.includes("ecg") || cleanMsg.includes("test")) {
+      if (cleanMsg.includes("emergency") || cleanMsg.includes("ecg") || cleanMsg.includes("test") || cleanMsg.includes("hospital")) {
         return "Thank you for explaining that, doctor. I feel much more reassured. I will schedule the ECG test first thing tomorrow. Thank you for your care.";
       }
-      return `I understand, doctor. Regarding my chest discomfort, you asked about that. I also feel quite short of breath. What should my next step be?`;
+      if (cleanMsg.includes("exercise") || cleanMsg.includes("exertion") || cleanMsg.includes("walk") || cleanMsg.includes("stairs") || cleanMsg.includes("trigger")) {
+        return "It definitely gets worse when I walk up stairs or exert myself. When I sit down for a few minutes, it eases slightly, but the heaviness remains. Is that typical?";
+      }
+      if (cleanMsg.includes("duration") || cleanMsg.includes("long") || cleanMsg.includes("start") || cleanMsg.includes("hour")) {
+        return "It started about two hours ago, doctor. It's been constant since then, sometimes getting sharper when I try to take a deep breath.";
+      }
+      return `Doctor, I also feel a bit short of breath and some mild nausea along with this chest pressure. What other symptoms should I be concerned about?`;
     }
   };
 

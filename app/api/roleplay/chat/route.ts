@@ -135,11 +135,16 @@ async function callGeminiWithRetry(
 
 export async function POST(req: Request) {
   try {
-    const { career, scenario, message, history, profile, isFeedback, stats } = await req.json();
+    const body = await req.json();
+    const { career, scenario, message, history, profile, isFeedback, stats } = body;
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (process.env.NODE_ENV === "development") {
-      console.log(`[Gemini API DEBUG] Route called: /api/roleplay/chat`);
+      console.log("Roleplay API body parsed once", {
+        mode: isFeedback ? "evaluation" : "chat",
+        career,
+        messageCount: history?.length,
+      });
       console.log(`[Gemini API DEBUG] GEMINI_API_KEY loaded: ${apiKey ? "YES" : "NO"}`);
     }
     if (!apiKey) {
