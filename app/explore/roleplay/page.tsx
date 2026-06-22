@@ -45,7 +45,7 @@ export default function VoiceRoleplayPage() {
   // Voice API state
   const [isListening, setIsListening] = useState(false);
   const [voiceOutputEnabled, setVoiceOutputEnabled] = useState(true);
-  const [isCharacterSpeaking, setIsCharacterSpeaking] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [micStatus, setMicStatus] = useState<"ready" | "listening" | "processing" | "no-speech" | "blocked" | "unsupported" | "not-secure">("ready");
   
@@ -53,38 +53,105 @@ export default function VoiceRoleplayPage() {
   const [isTwoWayMode, setIsTwoWayMode] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
   const [turnCount, setTurnCount] = useState(0);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [isFallbackMode, setIsFallbackMode] = useState(false);
+  const [isSessionEnded, setIsSessionEnded] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  // Voice Performance Signals Tracking
+  const [voiceUsed, setVoiceUsed] = useState(false);
+  const [totalSpeakingTime, setTotalSpeakingTime] = useState(0);
+  const [speakingTimeCount, setSpeakingTimeCount] = useState(0);
+  const [interruptions, setInterruptions] = useState(0);
+  const [hesitationCount, setHesitationCount] = useState(0);
+  const [voiceTurnsCount, setVoiceTurnsCount] = useState(0);
+  const [evaluationStats, setEvaluationStats] = useState<any>(null);
+
+  const voiceUsedRef = useRef(voiceUsed);
+  const totalSpeakingTimeRef = useRef(totalSpeakingTime);
+  const speakingTimeCountRef = useRef(speakingTimeCount);
+  const interruptionsRef = useRef(interruptions);
+  const hesitationCountRef = useRef(hesitationCount);
+  const voiceTurnsCountRef = useRef(voiceTurnsCount);
+  const recognitionStartTimeRef = useRef<number | null>(null);
+
+  // Constants
+  const MAX_TURNS = 6;
 
   // Recognition Ref
   const recognitionRef = useRef<any>(null);
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
   const synthesisRef = useRef<SpeechSynthesis | null>(null);
+  const activeAbortControllerRef = useRef<AbortController | null>(null);
+  const autoListenTimeoutRef = useRef<any>(null);
   
   // Feedback evaluation report state
   const [showReport, setShowReport] = useState(false);
   const [report, setReport] = useState<RoleplayReport | null>(null);
+  const [animateScores, setAnimateScores] = useState(false);
 
   // Refs to prevent stale closures inside event listeners
   const isTwoWayModeRef = useRef(isTwoWayMode);
   const isPausedRef = useRef(isPaused);
-  const isProcessingRef = useRef(false);
+  const isProcessingRef = useRef(isProcessing);
   const isListeningRef = useRef(isListening);
-  const isCharacterSpeakingRef = useRef(isCharacterSpeaking);
+  const isSpeakingRef = useRef(isSpeaking);
   const isThinkingRef = useRef(isThinking);
   const careerRef = useRef(career);
   const historyRef = useRef(history);
   const turnCountRef = useRef(turnCount);
   const isPlayingRef = useRef(isPlaying);
+  const isSessionEndedRef = useRef(isSessionEnded);
 
   // Sync refs with state updates
   useEffect(() => { isTwoWayModeRef.current = isTwoWayMode; }, [isTwoWayMode]);
   useEffect(() => { isPausedRef.current = isPaused; }, [isPaused]);
   useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
-  useEffect(() => { isCharacterSpeakingRef.current = isCharacterSpeaking; }, [isCharacterSpeaking]);
+  useEffect(() => { isSpeakingRef.current = isSpeaking; }, [isSpeaking]);
   useEffect(() => { isThinkingRef.current = isThinking; }, [isThinking]);
   useEffect(() => { careerRef.current = career; }, [career]);
   useEffect(() => { historyRef.current = history; }, [history]);
   useEffect(() => { turnCountRef.current = turnCount; }, [turnCount]);
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => { isSessionEndedRef.current = isSessionEnded; }, [isSessionEnded]);
+  useEffect(() => { isProcessingRef.current = isProcessing; }, [isProcessing]);
+  useEffect(() => { voiceUsedRef.current = voiceUsed; }, [voiceUsed]);
+  useEffect(() => { totalSpeakingTimeRef.current = totalSpeakingTime; }, [totalSpeakingTime]);
+  useEffect(() => { speakingTimeCountRef.current = speakingTimeCount; }, [speakingTimeCount]);
+  useEffect(() => { interruptionsRef.current = interruptions; }, [interruptions]);
+  useEffect(() => { hesitationCountRef.current = hesitationCount; }, [hesitationCount]);
+  useEffect(() => { voiceTurnsCountRef.current = voiceTurnsCount; }, [voiceTurnsCount]);
+
+  const stopAllVoiceActivity = () => {
+    if (synthesisRef.current) {
+      try {
+        synthesisRef.current.cancel();
+      } catch {}
+    }
+    setIsSpeaking(false);
+    isSpeakingRef.current = false;
+
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.abort();
+      } catch {}
+    }
+    setIsListening(false);
+    isListeningRef.current = false;
+    setMicStatus("ready");
+
+    if (activeAbortControllerRef.current) {
+      try {
+        activeAbortControllerRef.current.abort();
+      } catch {}
+      activeAbortControllerRef.current = null;
+    }
+
+    if (autoListenTimeoutRef.current) {
+      clearTimeout(autoListenTimeoutRef.current);
+      autoListenTimeoutRef.current = null;
+    }
+  };
 
   // Save session state to localStorage
   const saveSessionToLocalStorage = (
@@ -168,11 +235,31 @@ export default function VoiceRoleplayPage() {
       rec.lang = "en-IN";
 
       rec.onstart = () => {
+        if (isSessionEndedRef.current || turnCountRef.current >= MAX_TURNS) {
+          try {
+            rec.abort();
+          } catch {}
+          setIsListening(false);
+          isListeningRef.current = false;
+          setMicStatus("ready");
+          return;
+        }
+        if (isSpeakingRef.current) {
+          const nextInterruptions = interruptionsRef.current + 1;
+          setInterruptions(nextInterruptions);
+          interruptionsRef.current = nextInterruptions;
+        }
+        recognitionStartTimeRef.current = Date.now();
         setIsListening(true);
+        isListeningRef.current = true;
         setMicStatus("listening");
       };
 
       rec.onresult = (event: any) => {
+        if (isSessionEndedRef.current || turnCountRef.current >= MAX_TURNS) {
+          return;
+        }
+
         let interimTranscript = "";
         let finalTranscript = "";
         
@@ -194,9 +281,26 @@ export default function VoiceRoleplayPage() {
           const cleanFinal = finalTranscript.trim();
           if (cleanFinal) {
             setCurrentInput(cleanFinal);
+
+            // Track hesitations
+            const hesitations = cleanFinal.match(/\b(um|uh|er|ah|like|hmmm|well)\b/gi) || [];
+            if (hesitations.length > 0) {
+              const nextHesitations = hesitationCountRef.current + hesitations.length;
+              setHesitationCount(nextHesitations);
+              hesitationCountRef.current = nextHesitations;
+            }
+
+            // Set voice used and increment turns
+            setVoiceUsed(true);
+            voiceUsedRef.current = true;
+
+            const nextVoiceTurns = voiceTurnsCountRef.current + 1;
+            setVoiceTurnsCount(nextVoiceTurns);
+            voiceTurnsCountRef.current = nextVoiceTurns;
             
             // Auto-send in continuous voice loop mode
-            if (isTwoWayModeRef.current && !isPausedRef.current && !isProcessingRef.current) {
+            if (isTwoWayModeRef.current && !isPausedRef.current && !isProcessingRef.current && !isSessionEndedRef.current && turnCountRef.current < MAX_TURNS) {
+              setIsProcessing(true);
               isProcessingRef.current = true;
               
               // Stop recognition immediately to prevent duplicate sends
@@ -212,8 +316,14 @@ export default function VoiceRoleplayPage() {
 
       rec.onerror = (e: any) => {
         setIsListening(false);
+        isListeningRef.current = false;
         const errType = e.error;
         console.error("Speech Recognition Error:", errType, e);
+
+        if (isSessionEndedRef.current) {
+          setMicStatus("ready");
+          return;
+        }
 
         if (errType === "not-allowed" || errType === "permission-denied") {
           setMicStatus("blocked");
@@ -228,7 +338,23 @@ export default function VoiceRoleplayPage() {
 
       rec.onend = () => {
         setIsListening(false);
-        if (!isProcessingRef.current) {
+        isListeningRef.current = false;
+        
+        if (recognitionStartTimeRef.current) {
+          const duration = (Date.now() - recognitionStartTimeRef.current) / 1000;
+          if (duration > 0.5) {
+            const nextTotal = totalSpeakingTimeRef.current + duration;
+            setTotalSpeakingTime(nextTotal);
+            totalSpeakingTimeRef.current = nextTotal;
+            
+            const nextCount = speakingTimeCountRef.current + 1;
+            setSpeakingTimeCount(nextCount);
+            speakingTimeCountRef.current = nextCount;
+          }
+          recognitionStartTimeRef.current = null;
+        }
+
+        if (!isProcessingRef.current || isSessionEndedRef.current) {
           setMicStatus("ready");
         }
       };
@@ -237,14 +363,7 @@ export default function VoiceRoleplayPage() {
     }
 
     return () => {
-      if (synthesisRef.current) {
-        synthesisRef.current.cancel();
-      }
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.abort();
-        } catch {}
-      }
+      stopAllVoiceActivity();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -262,15 +381,16 @@ export default function VoiceRoleplayPage() {
     if (synthesisRef.current) {
       synthesisRef.current.cancel();
     }
-    setIsCharacterSpeaking(false);
+    setIsSpeaking(false);
+    isSpeakingRef.current = false;
     
-    if (isListeningRef.current) return;
+    if (isListeningRef.current || isSessionEndedRef.current || turnCountRef.current >= MAX_TURNS) return;
 
     setMicStatus("processing");
     try {
       await navigator.mediaDevices.getUserMedia({ audio: true });
       // Double check states before starting
-      if (isTwoWayModeRef.current && isPlayingRef.current && !isPausedRef.current && !isProcessingRef.current) {
+      if (isTwoWayModeRef.current && isPlayingRef.current && !isPausedRef.current && !isProcessingRef.current && !isSessionEndedRef.current && turnCountRef.current < MAX_TURNS) {
         recognitionRef.current.start();
       }
     } catch (err: any) {
@@ -281,17 +401,30 @@ export default function VoiceRoleplayPage() {
         setMicStatus("ready");
       }
       setIsListening(false);
+      isListeningRef.current = false;
     }
   };
 
   // Voice Speech synthesis reader helper
   const speakText = (text: string) => {
+    if (autoListenTimeoutRef.current) {
+      clearTimeout(autoListenTimeoutRef.current);
+      autoListenTimeoutRef.current = null;
+    }
+
+    if (isSessionEndedRef.current || turnCountRef.current >= MAX_TURNS) {
+      setIsSpeaking(false);
+      isSpeakingRef.current = false;
+      return;
+    }
+
     if (!synthesisRef.current || !voiceOutputEnabled) {
-      setIsCharacterSpeaking(false);
+      setIsSpeaking(false);
+      isSpeakingRef.current = false;
       // Muted fallback: wait 2 seconds for user to read then start listening
-      if (isTwoWayModeRef.current && isPlayingRef.current && !isPausedRef.current && !isProcessingRef.current) {
-        setTimeout(() => {
-          if (isTwoWayModeRef.current && isPlayingRef.current && !isPausedRef.current && !isProcessingRef.current) {
+      if (isTwoWayModeRef.current && isPlayingRef.current && !isPausedRef.current && !isProcessingRef.current && !isSessionEndedRef.current && turnCountRef.current < MAX_TURNS) {
+        autoListenTimeoutRef.current = setTimeout(() => {
+          if (isTwoWayModeRef.current && isPlayingRef.current && !isPausedRef.current && !isProcessingRef.current && !isSessionEndedRef.current && turnCountRef.current < MAX_TURNS) {
             startListeningAutomatically();
           }
         }, 2000);
@@ -324,17 +457,28 @@ export default function VoiceRoleplayPage() {
       if (naturalVoice) utterance.voice = naturalVoice;
     }
 
-    utterance.onstart = () => setIsCharacterSpeaking(true);
+    utterance.onstart = () => {
+      if (isSessionEndedRef.current || turnCountRef.current >= MAX_TURNS) {
+        synthesisRef.current?.cancel();
+        setIsSpeaking(false);
+        isSpeakingRef.current = false;
+        return;
+      }
+      setIsSpeaking(true);
+      isSpeakingRef.current = true;
+    };
     utterance.onend = () => {
-      setIsCharacterSpeaking(false);
-      // Auto-restart mic in Two-Way Mode
-      if (isTwoWayModeRef.current && isPlayingRef.current && !isPausedRef.current && !isProcessingRef.current) {
+      setIsSpeaking(false);
+      isSpeakingRef.current = false;
+      // Auto-restart mic in Two-Way Mode only if session is active and under limit
+      if (isTwoWayModeRef.current && isPlayingRef.current && !isPausedRef.current && !isProcessingRef.current && !isSessionEndedRef.current && turnCountRef.current < MAX_TURNS) {
         startListeningAutomatically();
       }
     };
     utterance.onerror = () => {
-      setIsCharacterSpeaking(false);
-      if (isTwoWayModeRef.current && isPlayingRef.current && !isPausedRef.current && !isProcessingRef.current) {
+      setIsSpeaking(false);
+      isSpeakingRef.current = false;
+      if (isTwoWayModeRef.current && isPlayingRef.current && !isPausedRef.current && !isProcessingRef.current && !isSessionEndedRef.current && turnCountRef.current < MAX_TURNS) {
         startListeningAutomatically();
       }
     };
@@ -344,38 +488,68 @@ export default function VoiceRoleplayPage() {
 
   // Start a roleplay session
   const startSession = async (selectedCareer: "lawyer" | "doctor") => {
+    stopAllVoiceActivity();
+
     setCareer(selectedCareer);
     setIsPlaying(true);
     setTurnCount(0);
+    turnCountRef.current = 0;
     setHistory([]);
+    historyRef.current = [];
     setCurrentInput("");
     setShowReport(false);
     setReport(null);
+    setAnimateScores(false);
     setIsThinking(true);
     setIsPaused(false);
+    isPausedRef.current = false;
+    setConfigError(null);
+    setIsFallbackMode(false);
+    setIsSessionEnded(false);
+    isSessionEndedRef.current = false;
+    setIsProcessing(false);
     isProcessingRef.current = false;
+
+    // Reset voice performance tracking states
+    setVoiceUsed(false);
+    voiceUsedRef.current = false;
+    setTotalSpeakingTime(0);
+    totalSpeakingTimeRef.current = 0;
+    setSpeakingTimeCount(0);
+    speakingTimeCountRef.current = 0;
+    setInterruptions(0);
+    interruptionsRef.current = 0;
+    setHesitationCount(0);
+    hesitationCountRef.current = 0;
+    setVoiceTurnsCount(0);
+    voiceTurnsCountRef.current = 0;
+    recognitionStartTimeRef.current = null;
+    setEvaluationStats(null);
 
     careerRef.current = selectedCareer;
     isPlayingRef.current = true;
-    historyRef.current = [];
-    turnCountRef.current = 0;
-    isPausedRef.current = false;
 
     if (selectedCareer === "lawyer") {
       const intro = "Welcome, counselor. The Court of CareerVerse is now in session. You represent the defendant. Please present your opening statement outlining why your client is not guilty of these charges.";
       setHistory([{ id: "init", sender: "character", text: intro }]);
       setIsThinking(false);
-      setTimeout(() => speakText(intro), 300);
+      setTimeout(() => {
+        if (!isSessionEndedRef.current) speakText(intro);
+      }, 300);
     } else {
       const intro = "Hello doctor... I'm really glad you could see me. For the last couple of days, I've had this persistent squeezing sensation right in the middle of my chest. It gets worse whenever I walk up a hill or carry anything heavy, and I feel really anxious and short of breath. Do you think I'm having a heart attack?";
       setHistory([{ id: "init", sender: "character", text: intro }]);
       setIsThinking(false);
-      setTimeout(() => speakText(intro), 300);
+      setTimeout(() => {
+        if (!isSessionEndedRef.current) speakText(intro);
+      }, 300);
     }
   };
 
   // Toggle Voice Capture manually
   const toggleListening = async () => {
+    if (isSessionEndedRef.current || turnCountRef.current >= MAX_TURNS) return;
+
     const isSecure = window.location.hostname === "localhost" ||
                      window.location.hostname === "127.0.0.1" ||
                      window.location.protocol === "https:";
@@ -394,7 +568,8 @@ export default function VoiceRoleplayPage() {
     if (synthesisRef.current) {
       synthesisRef.current.cancel();
     }
-    setIsCharacterSpeaking(false);
+    setIsSpeaking(false);
+    isSpeakingRef.current = false;
 
     if (isListening) {
       try {
@@ -403,6 +578,7 @@ export default function VoiceRoleplayPage() {
         console.error("Error stopping recognition:", e);
       }
       setIsListening(false);
+      isListeningRef.current = false;
       setMicStatus("ready");
     } else {
       setMicStatus("processing");
@@ -410,6 +586,11 @@ export default function VoiceRoleplayPage() {
         // Microphone permission check
         await navigator.mediaDevices.getUserMedia({ audio: true });
         
+        if (isSessionEndedRef.current || turnCountRef.current >= MAX_TURNS) {
+          setMicStatus("ready");
+          return;
+        }
+
         // If granted, start recognition
         recognitionRef.current.start();
       } catch (err: any) {
@@ -423,12 +604,14 @@ export default function VoiceRoleplayPage() {
           setMicStatus("blocked");
         }
         setIsListening(false);
+        isListeningRef.current = false;
       }
     }
   };
 
   // Toggle continuous voice loop mode
   const toggleTwoWayMode = () => {
+    if (isSessionEndedRef.current) return;
     const nextMode = !isTwoWayMode;
     setIsTwoWayMode(nextMode);
     isTwoWayModeRef.current = nextMode;
@@ -440,11 +623,12 @@ export default function VoiceRoleplayPage() {
           recognitionRef.current.abort();
         } catch {}
         setIsListening(false);
+        isListeningRef.current = false;
         setMicStatus("ready");
       }
     } else {
       // Start listening if toggling continuous voice back on
-      if (isPlaying && !isCharacterSpeaking && !isThinking && !isPaused && !isProcessingRef.current) {
+      if (isPlaying && !isSpeaking && !isThinking && !isPaused && !isProcessingRef.current) {
         startListeningAutomatically();
       }
     }
@@ -452,6 +636,7 @@ export default function VoiceRoleplayPage() {
 
   // Toggle microphone pause state during session
   const togglePause = () => {
+    if (isSessionEndedRef.current) return;
     const nextPaused = !isPaused;
     setIsPaused(nextPaused);
     isPausedRef.current = nextPaused;
@@ -463,11 +648,12 @@ export default function VoiceRoleplayPage() {
           recognitionRef.current.abort();
         } catch {}
         setIsListening(false);
+        isListeningRef.current = false;
         setMicStatus("ready");
       }
     } else {
       // Resume listening if appropriate
-      if (isTwoWayMode && isPlaying && !isCharacterSpeaking && !isThinking && !isProcessingRef.current) {
+      if (isTwoWayMode && isPlaying && !isSpeaking && !isThinking && !isProcessingRef.current) {
         startListeningAutomatically();
       }
     }
@@ -509,10 +695,21 @@ export default function VoiceRoleplayPage() {
   const handleSendMessage = async (textToSend?: string) => {
     const userText = textToSend !== undefined ? textToSend : currentInput.trim();
     if (!userText.trim()) {
+      setIsProcessing(false);
       isProcessingRef.current = false;
       return;
     }
 
+    if (isSessionEndedRef.current) {
+      return;
+    }
+
+    if (turnCountRef.current >= MAX_TURNS) {
+      await endRoleplaySession();
+      return;
+    }
+
+    setIsProcessing(true);
     isProcessingRef.current = true;
     setCurrentInput("");
 
@@ -524,21 +721,32 @@ export default function VoiceRoleplayPage() {
 
     setHistory((prev) => [...prev, newUserMsg]);
     setIsThinking(true);
-    setTurnCount((prev) => prev + 1);
 
     // Stop speaking if characters are talking
     if (synthesisRef.current) {
       synthesisRef.current.cancel();
     }
-    setIsCharacterSpeaking(false);
+    setIsSpeaking(false);
+    isSpeakingRef.current = false;
 
     // Use current history plus the new message
     const activeHistory = [...historyRef.current, newUserMsg];
+
+    let isTimeout = false;
+    const controller = new AbortController();
+    activeAbortControllerRef.current = controller;
+    const timeoutId = setTimeout(() => {
+      isTimeout = true;
+      controller.abort();
+    }, 20000); // 20s timeout limit
+
+    setConfigError(null);
 
     try {
       const response = await fetch("/api/roleplay/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           career: careerRef.current,
           scenario: careerRef.current === "lawyer" ? "Courtroom Trial" : "Clinical intake",
@@ -547,6 +755,12 @@ export default function VoiceRoleplayPage() {
           profile: { name: profile?.name, grade: profile?.grade }
         })
       });
+
+      clearTimeout(timeoutId);
+
+      if (isSessionEndedRef.current) {
+        return;
+      }
 
       if (response.ok) {
         const reader = response.body?.getReader();
@@ -559,8 +773,14 @@ export default function VoiceRoleplayPage() {
           setIsThinking(false);
 
           while (true) {
+            if (isSessionEndedRef.current) {
+              break;
+            }
             const { done, value } = await reader.read();
             if (done) break;
+            if (isSessionEndedRef.current) {
+              break;
+            }
             const chunk = decoder.decode(value, { stream: true });
             characterText += chunk;
             
@@ -569,37 +789,103 @@ export default function VoiceRoleplayPage() {
             );
           }
           
-          // AI Response speaks aloud
-          speakText(characterText);
+          if (!isSessionEndedRef.current) {
+            // AI Response speaks aloud
+            speakText(characterText);
+            
+            const newTurnCount = turnCountRef.current + 1;
+            setTurnCount(newTurnCount);
+            turnCountRef.current = newTurnCount;
+            
+            if (newTurnCount >= MAX_TURNS) {
+              await endRoleplaySession();
+            }
+          }
         } else {
-          throw new Error("No reader");
+          throw new Error("No reader available");
         }
       } else {
-        throw new Error("API failed");
+        const errData = await response.json().catch(() => ({}));
+        const errMsg = errData.error || "Internal Server Error";
+        throw new Error(errMsg);
       }
-    } catch (e) {
+    } catch (e: any) {
+      if (isSessionEndedRef.current || e.name === "AbortError") {
+        return;
+      }
+      clearTimeout(timeoutId);
+      setIsFallbackMode(true);
+      
+      let errorDisplay = "AI is temporarily unavailable. Continuing with fallback roleplay.";
+      if (isTimeout) {
+        errorDisplay = "AI response timed out (20s limit reached). Continuing with fallback roleplay.";
+      } else if (e.message?.includes("key not configured") || e.message?.includes("API key")) {
+        errorDisplay = "AI key not configured on server. Continuing with fallback roleplay.";
+      }
+      setConfigError(errorDisplay);
+
       console.warn("Falling back to local character dialogue engine.", e);
       const fallbackText = getContextualFallbackResponse(userText, activeHistory, careerRef.current);
       
       setIsThinking(false);
       
-      const responseId = `msg-fallback-${Date.now()}`;
-      setHistory((prev) => [...prev, { id: responseId, sender: "character", text: "" }]);
+      const fallbackTextWithNotice = `[Fallback]: ${fallbackText}`;
       
-      const words = fallbackText.split(" ");
-      let typedText = "";
-      for (let i = 0; i < words.length; i++) {
-        typedText += words[i] + (i === words.length - 1 ? "" : " ");
+      let hasPlaceholder = false;
+      let placeholderIdToUse = "";
+      
+      setHistory((prev) => {
+        const lastMsg = prev[prev.length - 1];
+        if (lastMsg && lastMsg.sender === "character") {
+          hasPlaceholder = true;
+          placeholderIdToUse = lastMsg.id;
+        }
+        return prev;
+      });
+
+      if (isSessionEndedRef.current) return;
+
+      if (hasPlaceholder && placeholderIdToUse) {
         setHistory((prev) => 
-          prev.map(m => m.id === responseId ? { ...m, text: typedText } : m)
+          prev.map(m => m.id === placeholderIdToUse ? { 
+            ...m, 
+            text: m.text ? (m.text + " (Connection lost. " + fallbackTextWithNotice + ")") : fallbackText 
+          } : m)
         );
-        await new Promise(r => setTimeout(r, 20 + Math.random() * 20));
+      } else {
+        const responseId = `msg-fallback-${Date.now()}`;
+        setHistory((prev) => [...prev, { id: responseId, sender: "character", text: "" }]);
+        
+        const words = fallbackText.split(" ");
+        let typedText = "";
+        for (let i = 0; i < words.length; i++) {
+          if (isSessionEndedRef.current) return;
+          typedText += words[i] + (i === words.length - 1 ? "" : " ");
+          setHistory((prev) => 
+            prev.map(m => m.id === responseId ? { ...m, text: typedText } : m)
+          );
+          await new Promise(r => setTimeout(r, 20 + Math.random() * 20));
+        }
       }
       
+      if (isSessionEndedRef.current) return;
+
       speakText(fallbackText);
+
+      const newTurnCount = turnCountRef.current + 1;
+      setTurnCount(newTurnCount);
+      turnCountRef.current = newTurnCount;
+      
+      if (newTurnCount >= MAX_TURNS) {
+        await endRoleplaySession();
+      }
     } finally {
+      if (activeAbortControllerRef.current === controller) {
+        activeAbortControllerRef.current = null;
+      }
       // Clear input and unlock processing
       setCurrentInput("");
+      setIsProcessing(false);
       isProcessingRef.current = false;
     }
   };
@@ -608,6 +894,90 @@ export default function VoiceRoleplayPage() {
   const generateFeedbackReport = async () => {
     setIsThinking(true);
     const evaluationHistory = [...history];
+    setConfigError(null);
+
+    // Calculate user response metrics
+    const userMessages = evaluationHistory.filter(m => m.sender === "user");
+    const wordCounts = userMessages.map(m => m.text.split(/\s+/).filter(Boolean).length);
+    const totalUserWords = wordCounts.reduce((a, b) => a + b, 0);
+    const avgResponseLengthVal = userMessages.length > 0 ? Math.round(totalUserWords / userMessages.length) : 0;
+
+    const questionCountVal = userMessages.filter(m => 
+      m.text.includes("?") || 
+      /\b(why|how|what|where|when|who|whose|which|did|do|does|is|are|was|were|can|could|should|would|has|have|had)\b/i.test(m.text)
+    ).length;
+
+    const followUpQuestionsVal = userMessages.slice(1).filter(m => 
+      m.text.includes("?") || 
+      /\b(why|how|what|where|when|who|whose|which|did|do|does|is|are|was|were|can|could|should|would|has|have|had)\b/i.test(m.text)
+    ).length;
+
+    const turnCompletionRate = Math.min(100, Math.round((turnCount / MAX_TURNS) * 100));
+    
+    // Voice metrics
+    const voiceUsedVal = voiceUsedRef.current;
+    const totalSpeakingTimeVal = Math.round(totalSpeakingTimeRef.current);
+    const averageSpeakingTimeSecVal = speakingTimeCountRef.current > 0 ? Math.round(totalSpeakingTimeRef.current / speakingTimeCountRef.current) : 0;
+    const interruptionsVal = interruptionsRef.current;
+    const hesitationCountVal = hesitationCountRef.current;
+    const microphoneParticipationVal = turnCount > 0 ? Math.round((voiceTurnsCountRef.current / turnCount) * 100) : 0;
+
+    // Logic keywords matches
+    const docKeywords = ["pain", "sensation", "chest", "happen", "worse", "better", "walk", "exertion", "breath", "anxious", "family", "history", "age", "work", "stress", "medical", "feel", "symptom"];
+    const lawKeywords = ["evidence", "proof", "witness", "camera", "footage", "scene", "happen", "charges", "guilty", "innocent", "client", "video", "flight", "run", "alarm", "trespass", "theft"];
+    const relevantKeywords = career === "doctor" ? docKeywords : lawKeywords;
+    
+    let keywordMatchesVal = 0;
+    userMessages.forEach(m => {
+      const text = m.text.toLowerCase();
+      relevantKeywords.forEach(kw => {
+        if (text.includes(kw)) keywordMatchesVal++;
+      });
+    });
+
+    const statsSummary = {
+      turnCount,
+      avgResponseLength: avgResponseLengthVal,
+      questionCount: questionCountVal,
+      followUpQuestions: followUpQuestionsVal,
+      turnCompletionRate,
+      voiceUsed: voiceUsedVal,
+      totalSpeakingTime: totalSpeakingTimeVal,
+      averageSpeakingTimeSec: averageSpeakingTimeSecVal,
+      interruptions: interruptionsVal,
+      hesitationCount: hesitationCountVal,
+      microphoneParticipation: microphoneParticipationVal,
+      keywordMatches: keywordMatchesVal
+    };
+    setEvaluationStats(statsSummary);
+
+    // Hybrid Scoring Subsystems
+    const depthScore = Math.min(100, Math.round(avgResponseLengthVal * 4));
+    const questionQuality = Math.min(100, Math.round((questionCountVal * 15) + (keywordMatchesVal * 8)));
+    const questionQualityScore = userMessages.length > 0 ? Math.max(40, questionQuality) : 0;
+    
+    let voiceScore = 100;
+    if (voiceUsedVal) {
+      voiceScore -= (interruptionsVal * 15);
+      voiceScore -= (hesitationCountVal * 4);
+      if (averageSpeakingTimeSecVal > 0) {
+        if (averageSpeakingTimeSecVal >= 5 && averageSpeakingTimeSecVal <= 15) voiceScore += 10;
+        else if (averageSpeakingTimeSecVal < 5) voiceScore -= 10;
+      }
+    }
+    const voiceScoreClamped = Math.max(40, Math.min(100, voiceScore));
+    const participationScore = voiceUsedVal
+      ? Math.round((turnCompletionRate * 0.6) + (voiceScoreClamped * 0.4))
+      : Math.round(turnCompletionRate);
+
+    const blendScore = (geminiScore: number, depth: number, quality: number, participation: number) => {
+      return Math.round(
+        (geminiScore * 0.4) +
+        (depth * 0.2) +
+        (quality * 0.2) +
+        (participation * 0.2)
+      );
+    };
 
     try {
       const response = await fetch("/api/roleplay/chat", {
@@ -618,56 +988,112 @@ export default function VoiceRoleplayPage() {
           scenario: career === "lawyer" ? "Courtroom Trial" : "Clinical intake",
           history: evaluationHistory.map(m => ({ role: m.sender === "user" ? "user" : "model", text: m.text })),
           profile: { name: profile?.name },
-          isFeedback: true
+          isFeedback: true,
+          stats: statsSummary
         })
       });
 
       if (response.ok) {
         const feedback = await response.json();
+        
+        let geminiConfidence = feedback.confidence || 75;
+        if (voiceUsedVal) {
+          let confidenceAdjustment = 0;
+          confidenceAdjustment -= (interruptionsVal * 5);
+          confidenceAdjustment -= (hesitationCountVal * 3);
+          if (averageSpeakingTimeSecVal > 0 && averageSpeakingTimeSecVal < 6) {
+            confidenceAdjustment -= 10;
+          } else if (averageSpeakingTimeSecVal >= 8) {
+            confidenceAdjustment += 5;
+          }
+          geminiConfidence = Math.max(40, Math.min(100, geminiConfidence + confidenceAdjustment));
+        }
+
+        const blendedComm = blendScore(feedback.communication || 75, depthScore, questionQualityScore, participationScore);
+        const blendedConf = blendScore(geminiConfidence, depthScore, questionQualityScore, participationScore);
+        const blendedReasoning = blendScore(feedback.reasoning || 75, depthScore, questionQualityScore, participationScore);
+        const blendedEmpathyOrPersuasion = blendScore(feedback.empathy || 75, depthScore, questionQualityScore, participationScore);
+        const blendedCareerFit = blendScore(feedback.careerFit || 75, depthScore, questionQualityScore, participationScore);
+
         const scoreReport: RoleplayReport = {
-          strengths: feedback.strengths || "Strong active listening and direct response structure.",
-          improvement: feedback.improvement || "Elaborate more on background context variables.",
-          communicationScore: feedback.communicationScore || 80,
-          confidenceScore: feedback.confidenceScore || 90,
-          reasoningScore: feedback.reasoningScore || 85,
-          empathyScore: feedback.empathyScore,
-          persuasionScore: feedback.persuasionScore,
-          careerFitScore: feedback.careerFitScore || 85,
-          careerFitInsight: feedback.careerFitInsight || "Demonstrates strong professional traits.",
-          nextAction: feedback.nextAction || (career === "lawyer" ? "Read up on court rules of evidence." : "Review cardiology diagnostic checklists.")
+          strengths: Array.isArray(feedback.strengths) ? feedback.strengths.join(". ") : (feedback.strengths || "Detailed diagnostic questioning and structured reasoning."),
+          improvement: Array.isArray(feedback.improvements) ? feedback.improvements.join(". ") : (feedback.improvement || feedback.improvements || "Further evidence backup and alibi timelines verification."),
+          communicationScore: blendedComm,
+          confidenceScore: blendedConf,
+          reasoningScore: blendedReasoning,
+          empathyScore: career === "doctor" ? blendedEmpathyOrPersuasion : undefined,
+          persuasionScore: career === "lawyer" ? blendedEmpathyOrPersuasion : undefined,
+          careerFitScore: blendedCareerFit,
+          careerFitInsight: feedback.summary || "Demonstrated a strong aptitude for quick situational diagnostics.",
+          nextAction: feedback.recommendedNextAction || (career === "lawyer" ? "Study rules of evidence." : "Review intake lists.")
         };
-        saveReportAndSync(scoreReport);
+        saveReportAndSync(scoreReport, feedback);
       } else {
-        throw new Error("API failed");
+        const errData = await response.json().catch(() => ({}));
+        const errMsg = errData.error || "Internal Server Error";
+        throw new Error(errMsg);
       }
-    } catch {
+    } catch (e: any) {
+      setIsFallbackMode(true);
+      let errorDisplay = "AI feedback generation is temporarily unavailable. Generating local fallback report.";
+      if (e.message?.includes("key not configured") || e.message?.includes("API key")) {
+        errorDisplay = "AI key not configured on server. Generating local fallback report.";
+      }
+      setConfigError(errorDisplay);
+
       // Local fallback metrics based on session history
-      const wordCounts = history
-        .filter(m => m.sender === "user")
-        .map(m => m.text.split(" ").length);
-      const avgWords = wordCounts.reduce((a, b) => a + b, 0) / (wordCounts.length || 1);
-      
-      // Calculate scores based on speech depth
-      const confidence = Math.min(100, Math.max(60, Math.round(55 + avgWords * 1.5)));
-      const communication = Math.min(100, Math.max(60, Math.round(50 + avgWords * 1.8)));
-      const reasoning = Math.min(100, Math.max(60, Math.round(58 + avgWords * 1.3)));
-      const empathy = career === "doctor" ? Math.min(100, Math.max(65, Math.round(62 + avgWords * 1.4))) : undefined;
-      const persuasion = career === "lawyer" ? Math.min(100, Math.max(60, Math.round(55 + avgWords * 1.6))) : undefined;
-      const fit = Math.min(100, Math.max(65, Math.round(60 + avgWords * 1.2)));
+      const mockGeminiCommunication = Math.min(95, Math.max(45, 55 + avgResponseLengthVal * 1.2 - (hesitationCountVal * 1.5)));
+      let mockGeminiConfidence = Math.min(95, Math.max(45, 50 + (voiceUsedVal ? 15 : 0) - (interruptionsVal * 6) + avgResponseLengthVal * 0.8));
+      if (voiceUsedVal) {
+        let confidenceAdjustment = 0;
+        confidenceAdjustment -= (interruptionsVal * 5);
+        confidenceAdjustment -= (hesitationCountVal * 3);
+        if (averageSpeakingTimeSecVal > 0 && averageSpeakingTimeSecVal < 6) {
+          confidenceAdjustment -= 10;
+        } else if (averageSpeakingTimeSecVal >= 8) {
+          confidenceAdjustment += 5;
+        }
+        mockGeminiConfidence = Math.max(40, Math.min(100, mockGeminiConfidence + confidenceAdjustment));
+      }
+      const mockGeminiReasoning = Math.min(95, Math.max(45, 45 + (keywordMatchesVal * 12) + (questionCountVal * 6)));
+      const mockGeminiEmpathyOrPersuasion = Math.min(95, Math.max(45, 50 + (keywordMatchesVal * 10) + (avgResponseLengthVal * 0.5)));
+      const mockGeminiCareerFit = Math.round((mockGeminiCommunication + mockGeminiConfidence + mockGeminiReasoning + mockGeminiEmpathyOrPersuasion) / 4);
+
+      const blendedComm = blendScore(mockGeminiCommunication, depthScore, questionQualityScore, participationScore);
+      const blendedConf = blendScore(mockGeminiConfidence, depthScore, questionQualityScore, participationScore);
+      const blendedReasoning = blendScore(mockGeminiReasoning, depthScore, questionQualityScore, participationScore);
+      const blendedEmpathyOrPersuasion = blendScore(mockGeminiEmpathyOrPersuasion, depthScore, questionQualityScore, participationScore);
+      const blendedCareerFit = blendScore(mockGeminiCareerFit, depthScore, questionQualityScore, participationScore);
+
+      const candidateStrengths: string[] = [];
+      if (blendedComm >= 70) candidateStrengths.push(career === "lawyer" ? "Assertive and professional courtroom delivery" : "Good patient reassuring tone");
+      if (blendedReasoning >= 70) candidateStrengths.push(career === "lawyer" ? "Strong evidence-based reasoning focus" : "Structured clinical symptom diagnostic tracking");
+      if (candidateStrengths.length < 2) {
+        candidateStrengths.push(career === "lawyer" ? "Consistent logical structure under pushback" : "Solid patient listening manner");
+        candidateStrengths.push("Clear and precise vocabulary usage");
+      }
+
+      const candidateImprovements: string[] = [];
+      if (blendedReasoning < 75) {
+        candidateImprovements.push(career === "lawyer" ? "Support arguments with specific evidence citations" : "Avoid jumping to a medical diagnosis too quickly");
+      }
+      if (avgResponseLengthVal < 15) {
+        candidateImprovements.push("Elaborate further on statements rather than providing short responses");
+      }
+      if (candidateImprovements.length < 2) {
+        candidateImprovements.push(career === "lawyer" ? "Address judge/witness alibi timelines more directly" : "Elaborate more on symptom triggers and chest pressure duration");
+        candidateImprovements.push("Incorporate more diagnostic questioning loops");
+      }
 
       const offlineFeedback: RoleplayReport = {
-        strengths: career === "lawyer" 
-          ? "You presented clear statements and maintained logical consistency under pushback." 
-          : "Great empathetic patient intake, you asked helpful symptom questions to narrow down options.",
-        improvement: career === "lawyer"
-          ? "Strengthen statutory citations and address eyewitness timelines directly."
-          : "Work on structuring your diagnosis explanation with clear symptom correlations.",
-        communicationScore: communication,
-        confidenceScore: confidence,
-        reasoningScore: reasoning,
-        empathyScore: empathy,
-        persuasionScore: persuasion,
-        careerFitScore: fit,
+        strengths: candidateStrengths.join(". "),
+        improvement: candidateImprovements.join(". "),
+        communicationScore: blendedComm,
+        confidenceScore: blendedConf,
+        reasoningScore: blendedReasoning,
+        empathyScore: career === "doctor" ? blendedEmpathyOrPersuasion : undefined,
+        persuasionScore: career === "lawyer" ? blendedEmpathyOrPersuasion : undefined,
+        careerFitScore: blendedCareerFit,
         careerFitInsight: career === "lawyer"
           ? "Demonstrates a strong aptitude for quick structural reasoning and courtroom etiquette."
           : "Shows strong clinical compassion and structured diagnostics necessary for client consulting.",
@@ -675,14 +1101,48 @@ export default function VoiceRoleplayPage() {
           ? "Check the mock trial simulated cases in the library." 
           : "Review the cardio-pulmonary symptom trees in Growth Hub."
       };
-      saveReportAndSync(offlineFeedback);
+      saveReportAndSync(offlineFeedback, {
+        summary: offlineFeedback.careerFitInsight,
+        strengths: candidateStrengths,
+        improvements: candidateImprovements
+      });
     }
   };
 
-  const saveReportAndSync = (evalReport: RoleplayReport) => {
+  const saveReportAndSync = (evalReport: RoleplayReport, rawFeedback?: any) => {
     setReport(evalReport);
     setIsThinking(false);
     setShowReport(true);
+    setAnimateScores(false);
+    setTimeout(() => {
+      setAnimateScores(true);
+    }, 150);
+
+    // Save to local roleplay history
+    if (typeof window !== "undefined") {
+      try {
+        const savedHistoryStr = localStorage.getItem("careerverse-roleplay-history") || "[]";
+        const savedHistory = JSON.parse(savedHistoryStr);
+        const newSessionRecord = {
+          date: new Date().toLocaleDateString(),
+          career,
+          scores: {
+            communication: evalReport.communicationScore,
+            confidence: evalReport.confidenceScore,
+            reasoning: evalReport.reasoningScore,
+            empathyOrPersuasion: career === "lawyer" ? (evalReport.persuasionScore || 80) : (evalReport.empathyScore || 80),
+            careerFit: evalReport.careerFitScore
+          },
+          strengths: Array.isArray(rawFeedback?.strengths) ? rawFeedback.strengths : [evalReport.strengths],
+          weaknesses: Array.isArray(rawFeedback?.improvements) ? rawFeedback.improvements : [evalReport.improvement],
+          summary: rawFeedback?.summary || evalReport.careerFitInsight
+        };
+        savedHistory.push(newSessionRecord);
+        localStorage.setItem("careerverse-roleplay-history", JSON.stringify(savedHistory));
+      } catch (err) {
+        console.error("Error saving session history:", err);
+      }
+    }
 
     // Sync XP gain and update Career DNA
     if (profile) {
@@ -703,6 +1163,17 @@ export default function VoiceRoleplayPage() {
         updatedDna.collaboration = newCollaboration;
       }
 
+      // Add journal reflection to the student timeline
+      const rpJournalReflection = {
+        id: `reflection-rp-${career}-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        careerId: career === "lawyer" ? "lawyer" : "doctor",
+        excited: `Completed flagship AI Voice Roleplay session as a ${career === "lawyer" ? "Defense Attorney" : "Medical Doctor"}. Scores: Fit ${evalReport.careerFitScore}%, Comm ${evalReport.communicationScore}%.`,
+        difficult: evalReport.improvement,
+        surprised: evalReport.strengths,
+        feeling: Math.round(evalReport.careerFitScore / 20)
+      };
+
       // Add to completed simulations list
       const completedSims = [...profile.completedSimulations];
       const roleplayId = `roleplay-${career}`;
@@ -714,7 +1185,8 @@ export default function VoiceRoleplayPage() {
         xp: profile.xp + addedXp,
         level: Math.floor((profile.xp + addedXp) / 400) + 1,
         completedSimulations: completedSims,
-        dna: updatedDna
+        dna: updatedDna,
+        journalReflections: [...(profile.journalReflections || []), rpJournalReflection]
       });
 
       // Sync simulation record details optionally to Supabase
@@ -754,20 +1226,15 @@ export default function VoiceRoleplayPage() {
     }
   };
 
-  const endSession = async () => {
-    if (synthesisRef.current) {
-      synthesisRef.current.cancel();
-    }
-    setIsCharacterSpeaking(false);
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.abort();
-      } catch {}
-    }
-    setIsListening(false);
-    setMicStatus("ready");
-    
+  const endRoleplaySession = async () => {
+    setIsSessionEnded(true);
+    isSessionEndedRef.current = true;
+    stopAllVoiceActivity();
     await generateFeedbackReport();
+  };
+
+  const endSession = async () => {
+    await endRoleplaySession();
   };
 
   const exitRoleplay = () => {
@@ -776,10 +1243,16 @@ export default function VoiceRoleplayPage() {
     setHistory([]);
     setShowReport(false);
     setReport(null);
-    if (synthesisRef.current) {
-      synthesisRef.current.cancel();
-    }
-    setIsCharacterSpeaking(false);
+    setAnimateScores(false);
+    setConfigError(null);
+    setIsFallbackMode(false);
+    setIsSessionEnded(false);
+    isSessionEndedRef.current = false;
+    setTurnCount(0);
+    turnCountRef.current = 0;
+    
+    stopAllVoiceActivity();
+    
     if (typeof window !== "undefined") {
       localStorage.removeItem("careerverse-active-roleplay-session");
     }
@@ -951,7 +1424,7 @@ export default function VoiceRoleplayPage() {
                     {career === "lawyer" ? "⚖️" : "🤕"}
                     
                     {/* Ring animation if speaking */}
-                    {isCharacterSpeaking && (
+                    {isSpeaking && (
                       <motion.div 
                         className={cn(
                           "absolute inset-0 rounded-3xl border-2 pointer-events-none",
@@ -965,8 +1438,13 @@ export default function VoiceRoleplayPage() {
                 </div>
 
                 <div>
-                  <h3 className="font-[family-name:var(--font-plus-jakarta)] text-base font-black text-slate-800">
+                  <h3 className="font-[family-name:var(--font-plus-jakarta)] text-base font-black text-slate-800 flex items-center justify-center gap-1.5">
                     {career === "lawyer" ? "Judge Sterling" : "Patient: Alex Mercer"}
+                    {isFallbackMode && (
+                      <span className="text-[8px] bg-amber-500/10 text-amber-700 border border-amber-500/25 px-1.5 py-0.5 rounded font-black uppercase animate-pulse select-none">
+                        Fallback
+                      </span>
+                    )}
                   </h3>
                   <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest mt-0.5">
                     {career === "lawyer" ? "Presiding Magistrate" : "Clinical Client · Age 28"}
@@ -992,7 +1470,16 @@ export default function VoiceRoleplayPage() {
 
                 {/* Speaking indicator and dynamic SVG wave */}
                 <div className="w-full pt-2 border-t border-border/40 mt-3">
-                  {isCharacterSpeaking ? (
+                  {isSessionEnded ? (
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] text-muted-foreground font-extrabold uppercase tracking-wider block">Session complete</span>
+                      <div className="flex items-center gap-1 h-5 justify-center">
+                        {[...Array(8)].map((_, idx) => (
+                          <div key={idx} className="w-1 h-1.5 bg-slate-200 rounded-full" />
+                        ))}
+                      </div>
+                    </div>
+                  ) : isSpeaking ? (
                     <div className="space-y-1.5">
                       <span className="text-[10px] font-black text-indigo-600 animate-pulse uppercase tracking-wider block">AI Speaking...</span>
                       <div className="flex items-center gap-1 h-5 justify-center">
@@ -1089,19 +1576,29 @@ export default function VoiceRoleplayPage() {
 
               {/* Controls bar */}
               <div className="rounded-[2rem] border border-border bg-card p-4 shadow-sm space-y-4">
+                {configError && (
+                  <div className="bg-amber-50 border border-amber-500/20 text-amber-800 text-[11px] font-bold p-3 rounded-xl flex items-start gap-2 select-none animate-in fade-in duration-300">
+                    <ShieldAlert className="h-4.5 w-4.5 text-amber-500 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <span className="block uppercase tracking-wider text-[9px] text-amber-600 font-extrabold">Config Warning</span>
+                      <p>{configError}</p>
+                    </div>
+                  </div>
+                )}
+                
                 <div className="flex items-center gap-3">
                   
                   {/* Microphone active button */}
                   <motion.button
                     onClick={toggleListening}
                     whileTap={{ scale: 0.95 }}
-                    disabled={micStatus === "unsupported" || micStatus === "not-secure" || isPaused}
+                    disabled={micStatus === "unsupported" || micStatus === "not-secure" || isPaused || isSessionEnded || isProcessing}
                     className={cn(
                       "h-12 w-12 rounded-xl flex items-center justify-center shrink-0 border transition-all duration-300 relative shadow-sm",
                       isListening
                         ? "bg-rose-500 border-rose-600 text-white animate-pulse"
                         : "bg-muted text-muted-foreground border-border hover:bg-slate-200 hover:text-foreground",
-                      (micStatus === "unsupported" || micStatus === "not-secure" || isPaused) && "opacity-50 cursor-not-allowed"
+                      (micStatus === "unsupported" || micStatus === "not-secure" || isPaused || isSessionEnded || isProcessing) && "opacity-50 cursor-not-allowed"
                     )}
                     title="Toggle microphone"
                   >
@@ -1115,13 +1612,15 @@ export default function VoiceRoleplayPage() {
                       value={currentInput}
                       onChange={(e) => setCurrentInput(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter" && !isThinking && !isProcessingRef.current) {
+                        if (e.key === "Enter" && !isThinking && !isProcessingRef.current && !isSessionEnded) {
                           handleSendMessage();
                         }
                       }}
-                      disabled={isThinking || isProcessingRef.current}
+                      disabled={isThinking || isProcessingRef.current || isSessionEnded}
                       placeholder={
-                        isListening 
+                        isSessionEnded
+                          ? "Session complete"
+                          : isListening 
                           ? "Speaking... (transcribing live)" 
                           : isPaused 
                           ? "Microphone is paused. Type your response..." 
@@ -1131,7 +1630,7 @@ export default function VoiceRoleplayPage() {
                     />
                     <button
                       onClick={() => handleSendMessage()}
-                      disabled={isThinking || isProcessingRef.current || !currentInput.trim()}
+                      disabled={isThinking || isProcessingRef.current || isSessionEnded || !currentInput.trim()}
                       className="absolute right-2 top-2 h-8 w-8 rounded-lg bg-primary hover:bg-primary/95 text-white flex items-center justify-center transition-colors disabled:opacity-30"
                     >
                       <Send className="h-4 w-4" />
@@ -1146,11 +1645,13 @@ export default function VoiceRoleplayPage() {
                     {/* Continuous Mode Toggle */}
                     <button
                       onClick={toggleTwoWayMode}
+                      disabled={isSessionEnded}
                       className={cn(
                         "text-[11px] font-extrabold uppercase tracking-wider px-3 py-1.5 rounded-lg border transition-all duration-300",
                         isTwoWayMode
                           ? "bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100"
-                          : "bg-muted border-border text-muted-foreground hover:bg-slate-200"
+                          : "bg-muted border-border text-muted-foreground hover:bg-slate-200",
+                        isSessionEnded && "opacity-50 cursor-not-allowed"
                       )}
                     >
                       {isTwoWayMode ? "🔁 Two-Way Voice Loop Active" : "💬 Manual Send Mode"}
@@ -1160,11 +1661,13 @@ export default function VoiceRoleplayPage() {
                     {isTwoWayMode && (
                       <button
                         onClick={togglePause}
+                        disabled={isSessionEnded}
                         className={cn(
                           "text-[11px] font-extrabold uppercase tracking-wider px-3 py-1.5 rounded-lg border flex items-center gap-1.5 transition-all duration-300",
                           isPaused
                             ? "bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100 animate-pulse"
-                            : "bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200"
+                            : "bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200",
+                          isSessionEnded && "opacity-50 cursor-not-allowed"
                         )}
                       >
                         {isPaused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
@@ -1178,7 +1681,8 @@ export default function VoiceRoleplayPage() {
                     variant="default"
                     size="sm"
                     onClick={endSession}
-                    className="rounded-lg text-xs font-bold h-8 px-3 tracking-tight bg-rose-600 hover:bg-rose-700 text-white"
+                    disabled={isSessionEnded}
+                    className="rounded-lg text-xs font-bold h-8 px-3 tracking-tight bg-rose-600 hover:bg-rose-700 text-white disabled:opacity-50"
                   >
                     End Session
                   </Button>
@@ -1272,11 +1776,16 @@ export default function VoiceRoleplayPage() {
                 <div className="relative h-16 w-16 flex items-center justify-center">
                   <svg className="absolute transform -rotate-90 w-full h-full">
                     <circle cx="32" cy="32" r="26" className="stroke-muted fill-none stroke-[4]" />
-                    <circle cx="32" cy="32" r="26" className="stroke-indigo-500 fill-none stroke-[4]" strokeDasharray="163" strokeDashoffset={163 - (163 * report.communicationScore) / 100} strokeLinecap="round" />
+                    <circle cx="32" cy="32" r="26" className="stroke-indigo-500 fill-none stroke-[4]" style={{ transition: 'stroke-dashoffset 1.5s ease-in-out' }} strokeDasharray="163" strokeDashoffset={163 - (163 * (animateScores ? report.communicationScore : 0)) / 100} strokeLinecap="round" />
                   </svg>
                   <span className="font-[family-name:var(--font-plus-jakarta)] text-sm font-black text-slate-800">{report.communicationScore}%</span>
                 </div>
                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider mt-3">Communication</span>
+                {evaluationStats && (
+                  <span className="text-[9px] font-bold text-indigo-500/80 mt-1 select-none">
+                    Avg words: {evaluationStats.avgResponseLength} | turns: {evaluationStats.turnCount}
+                  </span>
+                )}
               </div>
 
               {/* Stat 2: Confidence */}
@@ -1284,11 +1793,16 @@ export default function VoiceRoleplayPage() {
                 <div className="relative h-16 w-16 flex items-center justify-center">
                   <svg className="absolute transform -rotate-90 w-full h-full">
                     <circle cx="32" cy="32" r="26" className="stroke-muted fill-none stroke-[4]" />
-                    <circle cx="32" cy="32" r="26" className="stroke-orange-500 fill-none stroke-[4]" strokeDasharray="163" strokeDashoffset={163 - (163 * report.confidenceScore) / 100} strokeLinecap="round" />
+                    <circle cx="32" cy="32" r="26" className="stroke-orange-500 fill-none stroke-[4]" style={{ transition: 'stroke-dashoffset 1.5s ease-in-out' }} strokeDasharray="163" strokeDashoffset={163 - (163 * (animateScores ? report.confidenceScore : 0)) / 100} strokeLinecap="round" />
                   </svg>
                   <span className="font-[family-name:var(--font-plus-jakarta)] text-sm font-black text-slate-800">{report.confidenceScore}%</span>
                 </div>
                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider mt-3">Confidence</span>
+                {evaluationStats && (
+                  <span className="text-[9px] font-bold text-orange-500/80 mt-1 select-none">
+                    Hesitations: {evaluationStats.hesitationCount} | Interrupts: {evaluationStats.interruptions}
+                  </span>
+                )}
               </div>
 
               {/* Stat 3: Reasoning */}
@@ -1296,11 +1810,16 @@ export default function VoiceRoleplayPage() {
                 <div className="relative h-16 w-16 flex items-center justify-center">
                   <svg className="absolute transform -rotate-90 w-full h-full">
                     <circle cx="32" cy="32" r="26" className="stroke-muted fill-none stroke-[4]" />
-                    <circle cx="32" cy="32" r="26" className="stroke-teal-500 fill-none stroke-[4]" strokeDasharray="163" strokeDashoffset={163 - (163 * (report.reasoningScore || 80)) / 100} strokeLinecap="round" />
+                    <circle cx="32" cy="32" r="26" className="stroke-teal-500 fill-none stroke-[4]" style={{ transition: 'stroke-dashoffset 1.5s ease-in-out' }} strokeDasharray="163" strokeDashoffset={163 - (163 * (animateScores ? (report.reasoningScore || 80) : 0)) / 100} strokeLinecap="round" />
                   </svg>
                   <span className="font-[family-name:var(--font-plus-jakarta)] text-sm font-black text-slate-800">{report.reasoningScore || 80}%</span>
                 </div>
                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider mt-3">Reasoning</span>
+                {evaluationStats && (
+                  <span className="text-[9px] font-bold text-teal-500/80 mt-1 select-none">
+                    Logic keywords: {evaluationStats.keywordMatches}
+                  </span>
+                )}
               </div>
 
               {/* Stat 4: Empathy/Persuasion */}
@@ -1308,8 +1827,8 @@ export default function VoiceRoleplayPage() {
                 <div className="relative h-16 w-16 flex items-center justify-center">
                   <svg className="absolute transform -rotate-90 w-full h-full">
                     <circle cx="32" cy="32" r="26" className="stroke-muted fill-none stroke-[4]" />
-                    <circle cx="32" cy="32" r="26" className="stroke-violet-500 fill-none stroke-[4]" strokeDasharray="163" 
-                      strokeDashoffset={163 - (163 * (career === "lawyer" ? (report.persuasionScore || report.communicationScore) : (report.empathyScore || report.communicationScore))) / 100} 
+                    <circle cx="32" cy="32" r="26" className="stroke-violet-500 fill-none stroke-[4]" style={{ transition: 'stroke-dashoffset 1.5s ease-in-out' }} strokeDasharray="163" 
+                      strokeDashoffset={163 - (163 * (animateScores ? (career === "lawyer" ? (report.persuasionScore || report.communicationScore) : (report.empathyScore || report.communicationScore)) : 0)) / 100} 
                       strokeLinecap="round" />
                   </svg>
                   <span className="font-[family-name:var(--font-plus-jakarta)] text-sm font-black text-slate-800">
@@ -1319,8 +1838,12 @@ export default function VoiceRoleplayPage() {
                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider mt-3">
                   {career === "lawyer" ? "Persuasion" : "Empathy"}
                 </span>
+                {evaluationStats && (
+                  <span className="text-[9px] font-bold text-violet-500/80 mt-1 select-none">
+                    Questions: {evaluationStats.questionCount} | Voice turns: {evaluationStats.microphoneParticipation}%
+                  </span>
+                )}
               </div>
-
             </div>
 
             {/* Career Fit Score & Insight HUD */}
@@ -1329,7 +1852,7 @@ export default function VoiceRoleplayPage() {
                 <div className="relative h-20 w-20 flex items-center justify-center">
                   <svg className="absolute transform -rotate-90 w-full h-full">
                     <circle cx="40" cy="40" r="34" className="stroke-muted fill-none stroke-[5]" />
-                    <circle cx="40" cy="40" r="34" className="stroke-emerald-500 fill-none stroke-[5]" strokeDasharray="213" strokeDashoffset={213 - (213 * report.careerFitScore) / 100} strokeLinecap="round" />
+                    <circle cx="40" cy="40" r="34" className="stroke-emerald-500 fill-none stroke-[5]" style={{ transition: 'stroke-dashoffset 1.5s ease-in-out' }} strokeDasharray="213" strokeDashoffset={213 - (213 * (animateScores ? report.careerFitScore : 0)) / 100} strokeLinecap="round" />
                   </svg>
                   <span className="font-[family-name:var(--font-plus-jakarta)] text-base font-black text-slate-800">{report.careerFitScore}%</span>
                 </div>
@@ -1394,7 +1917,7 @@ export default function VoiceRoleplayPage() {
                 onClick={() => startSession(career!)}
                 className="flex-1 rounded-2xl h-12 border-border text-foreground hover:bg-muted font-bold"
               >
-                Retry Roleplay <RefreshCw className="h-4 w-4 ml-1.5" />
+                Start New Roleplay <RefreshCw className="h-4 w-4 ml-1.5" />
               </Button>
             </div>
 

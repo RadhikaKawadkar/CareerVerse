@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextResponse } from "next/server";
 
 export const runtime = "edge";
@@ -34,9 +35,96 @@ function findJsonObjectBoundary(str: string): number {
   return -1;
 }
 
+// Robust fetch helper with retry and model fallback
+async function callGeminiWithRetry(
+  apiKey: string,
+  modelList: string[],
+  isFeedback: boolean,
+  systemInstruction: string,
+  contents: any
+): Promise<Response> {
+  let response: Response | null = null;
+  let lastError: Error | null = null;
+  let delay = 800;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // Attempt gemini-2.5-flash first, then fall back to gemini-1.5-flash on retry
+    const currentModel = modelList[Math.min(attempt, modelList.length - 1)];
+    const method = isFeedback ? "generateContent" : "streamGenerateContent";
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:${method}?key=${apiKey}`;
+
+    const requestBody: any = {
+      contents,
+      systemInstruction: {
+        parts: [{ text: systemInstruction }],
+      },
+      generationConfig: {
+        temperature: isFeedback ? 0.2 : 0.7,
+        maxOutputTokens: isFeedback ? 1000 : 300,
+      },
+    };
+
+    if (isFeedback) {
+      requestBody.generationConfig.responseMimeType = "application/json";
+    }
+
+    try {
+      if (process.env.NODE_ENV === "development") {
+        console.log(`[Gemini API] Requesting ${currentModel} (${method}) - Attempt ${attempt + 1}...`);
+      }
+
+      response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (response.ok) {
+        return response;
+      }
+
+      const status = response.status;
+      const errText = await response.text();
+      lastError = new Error(`HTTP ${status}: ${errText}`);
+
+      if (process.env.NODE_ENV === "development") {
+        console.warn(
+          `[Gemini API] Attempt ${attempt + 1} failed with status ${status}. Error: ${errText.slice(0, 150)}`
+        );
+      }
+
+      // Retry on 500, 502, 503, 504
+      if (status === 500 || status === 502 || status === 503 || status === 504) {
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          delay *= 2; // 800ms -> 1600ms
+          continue;
+        }
+      }
+      return response; // Exit loop for non-retryable statuses (e.g. 400, 403)
+    } catch (err: any) {
+      lastError = err;
+      if (process.env.NODE_ENV === "development") {
+        console.warn(`[Gemini API] Attempt ${attempt + 1} network/timeout error:`, err);
+      }
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay *= 2;
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  if (lastError) throw lastError;
+  throw new Error("API call failed");
+}
+
 export async function POST(req: Request) {
   try {
-    const { career, scenario, message, history, profile, isFeedback } = await req.json();
+    const { career, scenario, message, history, profile, isFeedback, stats } = await req.json();
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
@@ -46,33 +134,53 @@ export async function POST(req: Request) {
       );
     }
 
-    const modelName = "gemini-2.5-flash";
+    const stableModels = ["gemini-2.5-flash", "gemini-1.5-flash"];
 
     if (isFeedback) {
-      // Feedback Generation Endpoint
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-      
-      const empathyOrPersuasion = career === "lawyer" ? "persuasionScore" : "empathyScore";
-      const empathyOrPersuasionLabel = career === "lawyer" ? "persuasion score" : "empathy score";
 
       const systemPrompt = `
         You are the CareerVerse Roleplay Evaluation Engine.
-        You will analyze a conversation history between a student and an AI character.
+        You will analyze a conversation history between a high school student and an AI character to generate a strict, realistic evaluation.
         The career simulation is: ${career === "lawyer" ? "Lawyer (Student acts as Lawyer, AI acts as Judge)" : "Doctor (Student acts as Doctor, AI acts as Patient)"}.
         Selected Scenario: ${scenario || (career === "lawyer" ? "Courtroom Trial" : "Clinical intake")}.
-        Student Profile: Name: ${profile?.name || "Student"}, Grade: ${profile?.grade || 10}.
+        Student Profile: Name: ${profile?.name || "Student"}.
         
-        Evaluate the student's performance across the session.
+        Session statistics:
+        - Turn count: ${stats?.turnCount || 0}
+        - Average Response Length: ${stats?.avgResponseLength || 0} words
+        - Question Count: ${stats?.questionCount || 0}
+        - Follow-up Questions: ${stats?.followUpQuestions || 0}
+        - Voice Mode used: ${stats?.voiceUsed ? "Yes" : "No"}
+        - Total Speaking Time: ${stats?.totalSpeakingTime || 0} seconds
+        - Interruptions: ${stats?.interruptions || 0}
+        - Hesitation Count: ${stats?.hesitationCount || 0}
+        - Microphone Participation: ${stats?.microphoneParticipation || 0}%
+
+        Evaluate the student's performance objectively, strictly, and realistically.
+        Rubric guidelines:
+        - If the student acts as a Doctor:
+          * Reward deep diagnostic questioning (asking about chest pain triggers, duration, radiation, family history, etc.).
+          * Reward empathy, active listening, and patient reassurance.
+          * Reward logical follow-up questions based on patient's answers.
+          * Reduce scores severely for shallow, generic, or brief questioning, or if they jump to a diagnosis too quickly.
+        - If the student acts as a Lawyer:
+          * Reward logical argument structure and clear legal evidence application.
+          * Reward asking for evidence, challenging Judge/witness assertions, and structured courtroom reasoning.
+          * Reward formal legal language and courtroom etiquette.
+          * Reduce scores severely for weak reasoning, lack of evidence-based statements, or overly informal/short responses.
+        
+        Do NOT give generic or high scores (like all 90s) unless the conversation is exceptionally professional. If responses are short, off-topic, or lack depth, give low scores (e.g., 40s-60s) and detailed improvement points. Differ scores significantly based on quality.
+        
         Provide a JSON response containing exactly the following keys:
-        - strengths: a string summarizing 1-2 major strengths of the student in this roleplay.
-        - improvement: a string summarizing 1-2 key areas where the student can improve.
-        - communicationScore: a number (0-100) representing their communication clarity and tone.
-        - confidenceScore: a number (0-100) representing their confidence level.
-        - reasoningScore: a number (0-100) representing their logical analysis, evidence application, or medical diagnosis logic.
-        - ${empathyOrPersuasion}: a number (0-100) representing their ${empathyOrPersuasionLabel}.
-        - careerFitScore: a number (0-100) representing overall career suitability based on these metrics.
-        - careerFitInsight: a brief, qualitative insight about their suitability for this career.
-        - nextAction: a specific, actionable next recommendation (e.g. "Read about hearsay rules of evidence" or "Practice active patient listening and reassurance").
+        - "communication": a number (0-100) representing communication clarity, tone, and vocabulary.
+        - "confidence": a number (0-100) representing confidence level and assertiveness.
+        - "reasoning": a number (0-100) representing diagnostic logic or argument structure.
+        - "empathy": a number (0-100) representing empathy (for Doctor) or persuasion (for Lawyer).
+        - "careerFit": a number (0-100) representing overall career suitability.
+        - "strengths": an array of strings (at least 2 strings) summarizing specific behaviors they performed well.
+        - "improvements": an array of strings (at least 2 strings) summarizing specific weaknesses or areas where they can improve.
+        - "summary": a string summarizing the performance and overall feedback.
+        - "recommendedNextAction": a specific, actionable next recommendation.
 
         IMPORTANT: Output ONLY a valid JSON object. Do not include markdown code block formatting (no \`\`\`json). Just the raw JSON.
       `;
@@ -90,41 +198,44 @@ export async function POST(req: Request) {
         }
       ];
 
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents,
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          generationConfig: {
-            temperature: 0.2,
-            responseMimeType: "application/json"
-          }
-        })
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Gemini API call failed for feedback in /api/roleplay/chat", errorText);
-        return NextResponse.json({ error: "Gemini API call failed" }, { status: response.status });
-      }
-
-      const data = await response.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (text) {
-        try {
-          const parsed = JSON.parse(text.trim());
-          return NextResponse.json(parsed);
-        } catch {
-          return NextResponse.json({ rawText: text });
+      try {
+        const response = await callGeminiWithRetry(apiKey, stableModels, true, systemPrompt, contents);
+        if (!response.ok) {
+          const status = response.status;
+          const errorText = await response.text();
+          console.error(`[Gemini API Feedback Error] Status: ${status}`, errorText);
+          return NextResponse.json({ error: "Gemini API feedback call failed" }, { status });
         }
+
+        const data = await response.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) {
+          try {
+            let cleanText = text.trim();
+            if (cleanText.startsWith("```")) {
+              const firstLineIndex = cleanText.indexOf("\n");
+              if (firstLineIndex !== -1) {
+                cleanText = cleanText.substring(firstLineIndex + 1);
+              }
+              if (cleanText.endsWith("```")) {
+                cleanText = cleanText.substring(0, cleanText.length - 3);
+              }
+              cleanText = cleanText.trim();
+            }
+            const parsed = JSON.parse(cleanText);
+            return NextResponse.json(parsed);
+          } catch {
+            return NextResponse.json({ rawText: text });
+          }
+        }
+        return NextResponse.json({ error: "No response text" }, { status: 500 });
+      } catch (retryErr: any) {
+        console.error("[Gemini API Feedback Final Error]", retryErr);
+        return NextResponse.json({ error: retryErr.message || "Feedback generation failed" }, { status: 500 });
       }
-      return NextResponse.json({ error: "No response text" }, { status: 500 });
     }
 
     // Roleplay Dialogue Generation (Streaming)
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?key=${apiKey}`;
-
     let systemInstruction = "";
     if (career === "lawyer") {
       systemInstruction = `
@@ -168,14 +279,12 @@ export async function POST(req: Request) {
         }))
       );
     } else if (career === "doctor") {
-      // For doctor, patient initiates
       contents.push({
         role: "user",
         parts: [{ text: "Start clinical intake consultation" }],
       });
     }
 
-    // Add current user message if any and not already appended
     if (message && (!history || history.length === 0 || history[history.length - 1].text !== message)) {
       contents.push({
         role: "user",
@@ -183,30 +292,19 @@ export async function POST(req: Request) {
       });
     }
 
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contents,
-        systemInstruction: {
-          parts: [{ text: systemInstruction }],
-        },
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 300,
-        },
-      }),
-    });
+    let response;
+    try {
+      response = await callGeminiWithRetry(apiKey, stableModels, false, systemInstruction, contents);
+    } catch (retryErr: any) {
+      console.error("[Gemini API Dialogue Final Error]", retryErr);
+      return NextResponse.json({ error: retryErr.message || "Dialogue generation failed" }, { status: 500 });
+    }
 
     if (!response.ok) {
+      const status = response.status;
       const errorText = await response.text();
-      console.error("Gemini API call failed for roleplay text in /api/roleplay/chat", errorText);
-      return NextResponse.json(
-        { error: "Gemini API call failed" },
-        { status: response.status }
-      );
+      console.error(`[Gemini API Dialogue Error] Status: ${status}`, errorText);
+      return NextResponse.json({ error: errorText || "Gemini API call failed" }, { status });
     }
 
     const encoder = new TextEncoder();
@@ -236,12 +334,23 @@ export async function POST(req: Request) {
               if (cleanPart) {
                 try {
                   const parsed = JSON.parse(cleanPart);
+
+                  // Handle Gemini error JSON inside stream
+                  if (parsed.error) {
+                    console.error("[Gemini Stream JSON Error]", parsed.error);
+                    controller.error(new Error(parsed.error.message || "Internal error in stream"));
+                    return;
+                  }
+
                   const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
                   if (text) {
                     controller.enqueue(encoder.encode(text));
                   }
-                } catch {
-                  // Prepend back if it's incomplete
+                } catch (jsonErr) {
+                  if (process.env.NODE_ENV === "development") {
+                    console.warn("[Stream Parser] JSON parse error on chunk:", jsonErr);
+                  }
+                  // Malformed chunk: prepend back if it might be incomplete
                   buffer = part + buffer;
                   break;
                 }
@@ -249,6 +358,7 @@ export async function POST(req: Request) {
             }
           }
         } catch (e) {
+          console.error("[Gemini Stream Read Error]", e);
           controller.error(e);
         } finally {
           controller.close();
