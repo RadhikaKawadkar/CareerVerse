@@ -141,12 +141,13 @@ export async function POST(req: Request) {
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (process.env.NODE_ENV === "development") {
-      console.log("Roleplay API body parsed once", {
+      console.log("Roleplay API request", {
         mode: isFeedback ? "evaluation" : "chat",
         career,
+        selectedLanguage: currentLang,
         messageCount: history?.length,
+        hasGeminiKey: Boolean(apiKey),
       });
-      console.log(`[Gemini API DEBUG] GEMINI_API_KEY loaded: ${apiKey ? "YES" : "NO"}`);
     }
     if (!apiKey) {
       if (process.env.NODE_ENV === "development") {
@@ -158,7 +159,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const stableModels = ["gemini-2.5-flash", "gemini-1.5-flash"];
+    const stableModels = ["gemini-1.5-flash"];
 
     if (isFeedback) {
 
@@ -270,6 +271,34 @@ export async function POST(req: Request) {
     }
 
     // Roleplay Dialogue Generation (Streaming)
+    let languagePrompt = "";
+    if (currentLang === "hindi") {
+      languagePrompt = `
+        Mandatory Language: Spoken Hindi using Roman script ONLY (English letters).
+        Rules:
+        1. Write ONLY in Roman Hindi (e.g., "vakil sahab aap apna opening statement dijiye" or "doctor mujhe 3 din se pet dard ho raha hai").
+        2. Do NOT use Devanagari script (no Hindi letters like मुझे, दर्द, etc.).
+        3. Do NOT use English vocabulary or sentences.
+        4. Do NOT translate to English or show English translations.
+        5. Never switch to English. The selected language is mandatory.
+      `;
+    } else if (currentLang === "hinglish") {
+      languagePrompt = `
+        Mandatory Language: Natural Indian Hinglish (mixture of Hindi and English) using Roman script ONLY (English letters).
+        Rules:
+        1. Speak in natural Indian Hinglish (e.g., "vakil sahab, is alibi ke baare me aapke paas kya proof hai?" or "doctor mujhe chest me pressure feel ho raha hai aur weakness bhi lag rahi hai").
+        2. Do NOT use Devanagari script under any circumstances.
+        3. Do NOT translate to full English.
+        4. Never switch to English. The selected language is mandatory.
+      `;
+    } else {
+      languagePrompt = `
+        Mandatory Language: English.
+        Rules:
+        1. Respond naturally in English.
+      `;
+    }
+
     let systemInstruction = "";
     if (career === "lawyer") {
       systemInstruction = `
@@ -277,14 +306,7 @@ export async function POST(req: Request) {
         The scenario is: ${scenario || "Courtroom Trial"}.
         A student named ${profile?.name || "Student"} is acting as the Defense Attorney.
         
-        Selected Language: ${currentLang}.
-        ${
-          currentLang === "hindi"
-            ? `IMPORTANT: You must speak entirely in Hindi, but write ONLY in Roman Hindi (using English letters, e.g., "vakil sahab aap apna opening statement dijiye"). Do NOT write in Devanagari script. Do NOT translate to English.`
-            : currentLang === "hinglish"
-            ? `IMPORTANT: You must speak entirely in natural Indian Hinglish, but write ONLY in Roman script (using English letters, e.g., "acha to aapka client wahan kya kar raha tha?"). Do NOT write in Devanagari script.`
-            : `Respond naturally in English.`
-        }
+        ${languagePrompt}
 
         Your behavior guidelines:
         - You must stay strictly in character as a formal, courtroom Judge.
@@ -300,14 +322,7 @@ export async function POST(req: Request) {
         You are a patient named Alex Mercer visiting the doctor (played by the student named ${profile?.name || "Student"}).
         The scenario is: ${scenario || "Clinical intake"}.
         
-        Selected Language: ${currentLang}.
-        ${
-          currentLang === "hindi"
-            ? `IMPORTANT: You must speak entirely in Hindi, but write ONLY in Roman Hindi (using English letters, e.g., "doctor mujhe chest me bahut dard ho raha hai"). Do NOT write in Devanagari script. Do NOT translate to English.`
-            : currentLang === "hinglish"
-            ? `IMPORTANT: You must speak entirely in natural Indian Hinglish, but write ONLY in Roman script (using English letters, e.g., "doctor mujhe kal se weakness lag rahi hai"). Do NOT write in Devanagari script.`
-            : `Respond naturally in English.`
-        }
+        ${languagePrompt}
 
         Your behavior guidelines:
         - You must stay strictly in character as the patient. You do not have medical knowledge and do not use clinical jargon.
@@ -402,11 +417,10 @@ export async function POST(req: Request) {
                   }
                 } catch (jsonErr) {
                   if (process.env.NODE_ENV === "development") {
-                    console.warn("[Stream Parser] JSON parse error on chunk:", jsonErr);
+                    console.warn("[Stream Parser] JSON parse error on chunk (skipping to avoid infinite loops):", jsonErr);
                   }
-                  // Malformed chunk: prepend back if it might be incomplete
-                  buffer = part + buffer;
-                  break;
+                  // Skip malformed/incomplete chunks instead of prepending them back,
+                  // preventing infinite loops and incorrect fallback triggers.
                 }
               }
             }

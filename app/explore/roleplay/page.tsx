@@ -168,6 +168,7 @@ export default function VoiceRoleplayPage() {
   const turnCountRef = useRef(turnCount);
   const isPlayingRef = useRef(isPlaying);
   const isSessionEndedRef = useRef(isSessionEnded);
+  const selectedLanguageRef = useRef(selectedLanguage);
 
   // Sync refs with state updates
   useEffect(() => { isTwoWayModeRef.current = isTwoWayMode; }, [isTwoWayMode]);
@@ -181,6 +182,7 @@ export default function VoiceRoleplayPage() {
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { isSessionEndedRef.current = isSessionEnded; }, [isSessionEnded]);
   useEffect(() => { isProcessingRef.current = isProcessing; }, [isProcessing]);
+  useEffect(() => { selectedLanguageRef.current = selectedLanguage; }, [selectedLanguage]);
   useEffect(() => { voiceUsedRef.current = voiceUsed; }, [voiceUsed]);
   useEffect(() => { totalSpeakingTimeRef.current = totalSpeakingTime; }, [totalSpeakingTime]);
   useEffect(() => { speakingTimeCountRef.current = speakingTimeCount; }, [speakingTimeCount]);
@@ -231,7 +233,8 @@ export default function VoiceRoleplayPage() {
     activeCareer: "lawyer" | "doctor" | null,
     activeHistory: Message[],
     activeTurnCount: number,
-    activeIsPlaying: boolean
+    activeIsPlaying: boolean,
+    activeLanguage: "english" | "hindi" | "hinglish"
   ) => {
     if (typeof window !== "undefined") {
       if (activeIsPlaying && activeCareer) {
@@ -240,6 +243,7 @@ export default function VoiceRoleplayPage() {
           history: activeHistory,
           turnCount: activeTurnCount,
           isPlaying: activeIsPlaying,
+          selectedLanguage: activeLanguage,
           timestamp: Date.now()
         };
         localStorage.setItem("careerverse-active-roleplay-session", JSON.stringify(sessionData));
@@ -252,9 +256,9 @@ export default function VoiceRoleplayPage() {
   // Sync state changes with localStorage
   useEffect(() => {
     if (isPlaying && career) {
-      saveSessionToLocalStorage(career, history, turnCount, isPlaying);
+      saveSessionToLocalStorage(career, history, turnCount, isPlaying, selectedLanguage);
     }
-  }, [career, history, turnCount, isPlaying]);
+  }, [career, history, turnCount, isPlaying, selectedLanguage]);
 
   // Load session from localStorage on mount
   useEffect(() => {
@@ -269,6 +273,9 @@ export default function VoiceRoleplayPage() {
             setHistory(parsed.history);
             setTurnCount(parsed.turnCount);
             setIsPlaying(parsed.isPlaying);
+            if (parsed.selectedLanguage) {
+              setSelectedLanguage(parsed.selectedLanguage);
+            }
             // Sync refs
             careerRef.current = parsed.career;
             historyRef.current = parsed.history;
@@ -466,6 +473,10 @@ export default function VoiceRoleplayPage() {
       await navigator.mediaDevices.getUserMedia({ audio: true });
       // Double check states before starting
       if (isTwoWayModeRef.current && isPlayingRef.current && !isPausedRef.current && !isProcessingRef.current && !isSessionEndedRef.current && turnCountRef.current < MAX_TURNS) {
+        recognitionRef.current.lang = selectedLanguageRef.current === "english" ? "en-US" : "hi-IN";
+        if (process.env.NODE_ENV === "development") {
+          console.log("Speech recognition language:", recognitionRef.current.lang);
+        }
         recognitionRef.current.start();
       }
     } catch (err: any) {
@@ -513,7 +524,8 @@ export default function VoiceRoleplayPage() {
     const utterance = new SpeechSynthesisUtterance(cleanText);
     utterance.rate = 1.05;
     
-    if (selectedLanguage === "english") {
+    const currentLang = selectedLanguageRef.current;
+    if (currentLang === "english") {
       utterance.lang = "en-US";
     } else {
       utterance.lang = "hi-IN";
@@ -521,8 +533,8 @@ export default function VoiceRoleplayPage() {
     
     // Choose appropriate voice
     const voices = synthesisRef.current.getVoices();
-    if (selectedLanguage !== "english") {
-      const hindiVoice = voices.find(v => v.lang.toLowerCase().startsWith("hi"));
+    if (currentLang !== "english") {
+      const hindiVoice = voices.find(v => v.lang.includes("hi"));
       if (hindiVoice) utterance.voice = hindiVoice;
     } else if (careerRef.current === "lawyer") {
       const maleVoice = voices.find(v => 
@@ -567,6 +579,9 @@ export default function VoiceRoleplayPage() {
       }
     };
     
+    if (process.env.NODE_ENV === "development") {
+      console.log("Speaking language:", utterance.lang);
+    }
     synthesisRef.current.speak(utterance);
   };
 
@@ -676,6 +691,10 @@ export default function VoiceRoleplayPage() {
         }
 
         // If granted, start recognition
+        recognitionRef.current.lang = selectedLanguageRef.current === "english" ? "en-US" : "hi-IN";
+        if (process.env.NODE_ENV === "development") {
+          console.log("Speech recognition language:", recognitionRef.current.lang);
+        }
         recognitionRef.current.start();
       } catch (err: any) {
         console.error("Microphone access error:", err);
@@ -746,26 +765,37 @@ export default function VoiceRoleplayPage() {
   // Get contextual fallback response if Gemini is unavailable
   const getContextualFallbackResponse = (userMsg: string, currentHistory: Message[], selectedCareer: "lawyer" | "doctor" | null) => {
     const cleanMsg = userMsg.toLowerCase();
-    const isHindiOrHinglish = selectedLanguage === "hindi" || selectedLanguage === "hinglish";
+    const lang = selectedLanguageRef.current;
     
     if (selectedCareer === "lawyer") {
-      if (isHindiOrHinglish) {
+      if (lang === "hindi") {
         if (cleanMsg.includes("innocent") || cleanMsg.includes("bekasoor") || cleanMsg.includes("gunah")) {
-          return "Vakil sahab, defence bekasoor hone ka claim kar raha hai. Lekin prosecution ke saboot mazboot hain. Aapke paas kya alibi ya record hai jo unhe scene par na hona prove kare?";
+          return "Vakil sahab, aapke paas is baat ka kya saboot hai? Prosecution ke paas solid evidence hai.";
         }
         if (cleanMsg.includes("evidence") || cleanMsg.includes("proof") || cleanMsg.includes("saboot") || cleanMsg.includes("alibi")) {
-          return "Court ne aapke saboot ko note kar liya hai. Par counselor, security camera footage bilkul saaf hai. Alarm bajne par aapka client wahan se kyu bhaaga?";
+          return "Vakil sahab, aapka alibi bohot kamzor hai. Court ko is par vishwas nahi hai.";
         }
-        if (cleanMsg.includes("flight") || cleanMsg.includes("ran") || cleanMsg.includes("scared") || cleanMsg.includes("bhaag") || cleanMsg.includes("panic")) {
-          return "Bekasoor aadmi ko bhaagne ki koi zaroorat nahi hoti. Court ko is baat par yakeen nahi hai. Aap apna aakhri defense argument pesh karein.";
-        }
-        if (cleanMsg.includes("trespass") || cleanMsg.includes("theft") || cleanMsg.includes("stole") || cleanMsg.includes("stolen") || cleanMsg.includes("chori")) {
-          return "Silent alarm ke hisab se trespass aur theft ke charges lagaye gaye hain. Aapka argument in logs ko kaise galat prove karta hai, counselor?";
+        if (cleanMsg.includes("flight") || cleanMsg.includes("ran") || cleanMsg.includes("bhaag") || cleanMsg.includes("scared") || cleanMsg.includes("panic")) {
+          return "Agar aapka client bekasoor hai, toh woh alarm bajne par wahan se kyu bhaaga?";
         }
         if (cleanMsg.includes("witness") || cleanMsg.includes("testimony") || cleanMsg.includes("statement") || cleanMsg.includes("gawah")) {
-          return "Witness ka bayan record kiya ja chuka hai. Counselor, aap is timeline me kisi aisi gadbadi ko point karein jo aapke client ko support kare.";
+          return "Witness ka statement bilkul clear hai. Aap isko kaise galat sabit karenge?";
         }
-        return `Vakil sahab, aapne kaha: "${userMsg}". Court ko batayein ki ye point state ke main saboot ko kaise kamzor karta hai.`;
+        return "Vakil sahab, aap apna agla point rakhein aur court ka samay mat barbad karein.";
+      } else if (lang === "hinglish") {
+        if (cleanMsg.includes("innocent") || cleanMsg.includes("bekasoor") || cleanMsg.includes("gunah")) {
+          return "Counselor, you claim client is innocent, par aapke paas proof kya hai?";
+        }
+        if (cleanMsg.includes("evidence") || cleanMsg.includes("proof") || cleanMsg.includes("saboot") || cleanMsg.includes("alibi")) {
+          return "Vakil sahab, is alibi ke baare me aapke paas koi concrete supporting evidence hai?";
+        }
+        if (cleanMsg.includes("flight") || cleanMsg.includes("ran") || cleanMsg.includes("bhaag") || cleanMsg.includes("scared") || cleanMsg.includes("panic")) {
+          return "Alarm bajte hi bhaagna panic nahi, guilty mind dikhata hai. State your argument.";
+        }
+        if (cleanMsg.includes("witness") || cleanMsg.includes("testimony") || cleanMsg.includes("statement") || cleanMsg.includes("gawah")) {
+          return "Witness statement was taken under oath. Counselor, do you have any cross-questioning?";
+        }
+        return "Vakil sahab, address the court directly on how this point proves your client's innocence.";
       } else {
         if (cleanMsg.includes("innocent") || cleanMsg.includes("not guilty")) {
           return "The defense claims innocence. However, counselor, the prosecution's evidence stands. What specific alibi or record can you show to disprove their presence at the scene?";
@@ -785,26 +815,46 @@ export default function VoiceRoleplayPage() {
         return `Counselor, you argued: "${userMsg}". Address the court directly on how this specific point refutes the state's prime evidence.`;
       }
     } else {
-      if (isHindiOrHinglish) {
+      if (lang === "hindi") {
         if (cleanMsg.includes("pain") || cleanMsg.includes("constriction") || cleanMsg.includes("hurt") || cleanMsg.includes("sensation") || cleanMsg.includes("dard")) {
-          return "Haan doctor, mere chest me bahut zyada pressure aur dard feel ho raha hai. Rest karne par bhi thik nahi ho raha, aur thoda sweat bhi aa raha hai. Kya ye koi serious issue hai?";
+          return "doctor mujhe dard kabhi kabhi zyada ho jata hai, khaaskar raat me. Bahut ghabrahat ho rahi hai.";
         }
-        if (cleanMsg.includes("family") || cleanMsg.includes("father") || cleanMsg.includes("history") || cleanMsg.includes("parents") || cleanMsg.includes("parivar")) {
-          return "Mere father ko bhi fifty ki age me heart surgery karwani padi thi. Isliye mujhe bahut darr lag raha hai, doctor. Mujhe kya hua hai?";
+        if (cleanMsg.includes("family") || cleanMsg.includes("father") || cleanMsg.includes("history") || cleanMsg.includes("parents") || cleanMsg.includes("parivar") || cleanMsg.includes("pitaji")) {
+          return "Ji doctor, mere pitaji ko bhi heart disease thi. Unki bypass surgery hui thi jab wo fifty ke the.";
+        }
+        if (cleanMsg.includes("exercise") || cleanMsg.includes("exertion") || cleanMsg.includes("walk") || cleanMsg.includes("stairs") || cleanMsg.includes("trigger") || cleanMsg.includes("seedhi") || cleanMsg.includes("chal")) {
+          return "Haan doctor, jab main seedhi chadhta hoon ya koi wazan uthata hoon, toh dard bohot badh jata hai.";
+        }
+        if (cleanMsg.includes("duration") || cleanMsg.includes("long") || cleanMsg.includes("start") || cleanMsg.includes("hour") || cleanMsg.includes("kab") || cleanMsg.includes("ghante")) {
+          return "Yeh dard lagbhag do ghante pehle shuru hua tha, aur tab se lagatar ho raha hai.";
         }
         if (cleanMsg.includes("diagnose") || cleanMsg.includes("think") || cleanMsg.includes("angina") || cleanMsg.includes("heart") || cleanMsg.includes("dil")) {
-          return "Angina... ye kya hota hai? Kya isko confirm karne ke liye koi test karna hoga? Agar mujhe raat ko phir se dard ho to kya emergency me jana chahiye?";
+          return "Doctor, kya mujhe heart attack aa raha hai? Mujhe bohot darr lag raha hai.";
         }
         if (cleanMsg.includes("emergency") || cleanMsg.includes("ecg") || cleanMsg.includes("test") || cleanMsg.includes("hospital") || cleanMsg.includes("ilaj")) {
-          return "Explain karne ke liye thank you, doctor. Mujhe ab thoda relief feel ho raha hai. Main kal subah hi ECG test schedule karunga. Thank you so much.";
+          return "Aap jo bolenge main wahi karunga doctor. Kya mujhe abhi hospital jana chahiye?";
         }
-        if (cleanMsg.includes("exercise") || cleanMsg.includes("exertion") || cleanMsg.includes("walk") || cleanMsg.includes("stairs") || cleanMsg.includes("trigger") || cleanMsg.includes("chal")) {
-          return "Jab main stairs chadta hoon ya koi physical kaam karta hoon, to dard bahut badh jata hai. Baithne par thoda kam hota hai par heavy lagta hai.";
+        return "Doctor, mujhe thodi ulti jaisa lag raha hai aur saans lene me bhi takleef ho rahi hai.";
+      } else if (lang === "hinglish") {
+        if (cleanMsg.includes("pain") || cleanMsg.includes("constriction") || cleanMsg.includes("hurt") || cleanMsg.includes("sensation") || cleanMsg.includes("dard")) {
+          return "doctor mujhe chest me pressure feel ho raha hai, especially jab main stairs chadhta hoon.";
         }
-        if (cleanMsg.includes("duration") || cleanMsg.includes("long") || cleanMsg.includes("start") || cleanMsg.includes("hour") || cleanMsg.includes("kab")) {
-          return "Ye lagbhag do ghante pehle shuru hua tha, doctor. Tab se lagatar dard ho raha hai, aur gehra saans lene me bhi dikkat ho rahi hai.";
+        if (cleanMsg.includes("family") || cleanMsg.includes("father") || cleanMsg.includes("history") || cleanMsg.includes("parents") || cleanMsg.includes("parivar") || cleanMsg.includes("pitaji")) {
+          return "Yes doctor, my father had heart issues at fifty. Unki bypass surgery hui thi. Is it genetic?";
         }
-        return `Doctor, mujhe saans lene me thodi pareshani ho rahi hai aur halki nausea bhi feel ho rahi hai. Mujhe kya karna chahiye?`;
+        if (cleanMsg.includes("exercise") || cleanMsg.includes("exertion") || cleanMsg.includes("walk") || cleanMsg.includes("stairs") || cleanMsg.includes("trigger") || cleanMsg.includes("seedhi") || cleanMsg.includes("chal")) {
+          return "Yes, whenever I climb stairs or lift heavy objects, chest me tension aur heaviness bahut badh jati hai.";
+        }
+        if (cleanMsg.includes("duration") || cleanMsg.includes("long") || cleanMsg.includes("start") || cleanMsg.includes("hour") || cleanMsg.includes("kab") || cleanMsg.includes("ghante")) {
+          return "It started around two hours ago, doctor. Tab se continue pressure lag raha hai, rest karne par bhi relief nahi hai.";
+        }
+        if (cleanMsg.includes("diagnose") || cleanMsg.includes("think") || cleanMsg.includes("angina") || cleanMsg.includes("heart") || cleanMsg.includes("dil")) {
+          return "Is it angina or heart attack, doctor? I am very anxious about this chest tightness.";
+        }
+        if (cleanMsg.includes("emergency") || cleanMsg.includes("ecg") || cleanMsg.includes("test") || cleanMsg.includes("hospital") || cleanMsg.includes("ilaj")) {
+          return "Should I go to the emergency room? Standard ECG test kab tak karwana hoga?";
+        }
+        return "Doctor, along with chest pressure, I feel slightly nauseous and short of breath.";
       } else {
         if (cleanMsg.includes("pain") || cleanMsg.includes("constriction") || cleanMsg.includes("hurt") || cleanMsg.includes("sensation")) {
           return "Yes, doctor. It is a squeezing, heavy weight right in my chest. It doesn't get better when I rest, and I feel quite sweaty. Do you think this is a heart issue?";
@@ -831,20 +881,15 @@ export default function VoiceRoleplayPage() {
 
   // Submit User Message
   const handleSendMessage = async (textToSend?: string) => {
+    if (isProcessingRef.current || isSessionEndedRef.current || turnCountRef.current >= MAX_TURNS) {
+      return;
+    }
+
     const rawInput = textToSend !== undefined ? textToSend : currentInput.trim();
     const userText = normalizeTranscript(rawInput);
     if (!userText.trim()) {
       setIsProcessing(false);
       isProcessingRef.current = false;
-      return;
-    }
-
-    if (isSessionEndedRef.current) {
-      return;
-    }
-
-    if (turnCountRef.current >= MAX_TURNS) {
-      await endRoleplaySession();
       return;
     }
 
@@ -892,7 +937,7 @@ export default function VoiceRoleplayPage() {
           message: userText,
           history: activeHistory.map(m => ({ role: m.sender === "user" ? "user" : "model", text: m.text })),
           profile: { name: profile?.name, grade: profile?.grade },
-          selectedLanguage
+          selectedLanguage: selectedLanguageRef.current
         })
       });
 
@@ -950,7 +995,10 @@ export default function VoiceRoleplayPage() {
         throw new Error(errMsg);
       }
     } catch (e: any) {
-      if (isSessionEndedRef.current || e.name === "AbortError") {
+      if (isSessionEndedRef.current) {
+        return;
+      }
+      if (e.name === "AbortError" && !isTimeout) {
         return;
       }
       clearTimeout(timeoutId);
@@ -963,6 +1011,14 @@ export default function VoiceRoleplayPage() {
         errorDisplay = "Gemini API key not found. Please check your configuration.";
       } else if (e.message?.includes("model unavailable") || e.message?.includes("Model")) {
         errorDisplay = "Gemini model unavailable. Please try again later.";
+      } else if (e.message?.includes("API_KEY_INVALID") || e.message?.includes("invalid key") || e.message?.includes("KEY_INVALID")) {
+        errorDisplay = "Gemini API key is invalid. Please check your key.";
+      } else if (e.message?.includes("quota") || e.message?.includes("rate limit") || e.message?.includes("429")) {
+        errorDisplay = "Gemini API quota/rate limit exceeded.";
+      } else if (e.message?.includes("Body is unusable") || e.message?.includes("already been read")) {
+        errorDisplay = "Request body already read error occurred.";
+      } else if (e.message?.includes("stream parse") || e.message?.includes("JSON parse")) {
+        errorDisplay = "Stream parse error occurred.";
       }
       setConfigError(errorDisplay);
 
@@ -1132,7 +1188,7 @@ export default function VoiceRoleplayPage() {
           profile: { name: profile?.name },
           isFeedback: true,
           stats: statsSummary,
-          selectedLanguage
+          selectedLanguage: selectedLanguageRef.current
         })
       });
 
@@ -1861,54 +1917,68 @@ export default function VoiceRoleplayPage() {
                 </div>
 
                 {/* Visible mic status UI */}
-                <div className="text-[11px] font-bold px-1 select-none flex items-center justify-between">
-                  <div>
-                    {micStatus === "unsupported" && (
-                      <span className="text-amber-600">
-                        Voice input is not supported in this browser. Please use Chrome.
-                      </span>
-                    )}
-                    {micStatus === "blocked" && (
-                      <span className="text-rose-500">
-                        Microphone permission blocked. Enable it in settings.
-                      </span>
-                    )}
-                    {micStatus === "not-secure" && (
-                      <span className="text-amber-500">
-                        Voice input requires HTTPS. Fallback to text.
-                      </span>
-                    )}
-                    {micStatus === "listening" && (
-                      <span className="text-rose-500 animate-pulse">
-                        🎤 Mic Listening... speak now.
-                      </span>
-                    )}
-                    {micStatus === "processing" && (
-                      <span className="text-indigo-500 animate-pulse">
-                        ⚙️ Processing speech...
-                      </span>
-                    )}
-                    {micStatus === "no-speech" && (
-                      <span className="text-slate-500">
-                        ⚠️ No speech detected. Speak clearly.
-                      </span>
-                    )}
-                    {micStatus === "ready" && !isPaused && (
-                      <span className="text-muted-foreground font-semibold">
-                        ✅ Ready for input
-                      </span>
-                    )}
-                    {isPaused && (
-                      <span className="text-amber-600 font-bold">
-                        ⏸️ Microphone Paused
-                      </span>
-                    )}
+                <div className="text-[11px] font-bold px-1 select-none flex flex-col gap-1">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      {micStatus === "unsupported" && (
+                        <span className="text-amber-600">
+                          Voice input is not supported in this browser. Please use Chrome.
+                        </span>
+                      )}
+                      {micStatus === "blocked" && (
+                        <span className="text-rose-500">
+                          Microphone permission blocked. Enable it in settings.
+                        </span>
+                      )}
+                      {micStatus === "not-secure" && (
+                        <span className="text-amber-500">
+                          Voice input requires HTTPS. Fallback to text.
+                        </span>
+                      )}
+                      {micStatus === "listening" && (
+                        <span className="text-rose-500 animate-pulse">
+                          🎤 Mic Listening... speak now.
+                        </span>
+                      )}
+                      {micStatus === "processing" && (
+                        <span className="text-indigo-500 animate-pulse">
+                          ⚙️ Processing speech...
+                        </span>
+                      )}
+                      {micStatus === "no-speech" && (
+                        <span className="text-slate-500">
+                          ⚠️ No speech detected. Speak clearly.
+                        </span>
+                      )}
+                      {micStatus === "ready" && !isPaused && (
+                        <span className="text-muted-foreground font-semibold">
+                          ✅ Ready for input
+                        </span>
+                      )}
+                      {isPaused && (
+                        <span className="text-amber-600 font-bold">
+                          ⏸️ Microphone Paused
+                        </span>
+                      )}
+                    </div>
+                    
+                    {/* Turn count display */}
+                    <span className="text-[10px] text-muted-foreground font-mono">
+                      Turns: {turnCount}
+                    </span>
                   </div>
-                  
-                  {/* Turn count display */}
-                  <span className="text-[10px] text-muted-foreground font-mono">
-                    Turns: {turnCount}
-                  </span>
+
+                  {/* Language Mode Labels */}
+                  {selectedLanguage === "hindi" && (
+                    <div className="text-[10px] text-primary/80 font-black tracking-wide border-t border-border/20 pt-1 mt-1">
+                      🇮🇳 Speaking in Hindi · Displayed in Roman Hindi
+                    </div>
+                  )}
+                  {selectedLanguage === "hinglish" && (
+                    <div className="text-[10px] text-primary/80 font-black tracking-wide border-t border-border/20 pt-1 mt-1">
+                      🇮🇳 Speaking in Hinglish · Displayed in Roman script
+                    </div>
+                  )}
                 </div>
               </div>
 
