@@ -136,7 +136,8 @@ async function callGeminiWithRetry(
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { career, scenario, message, history, profile, isFeedback, stats } = body;
+    const { career, scenario, message, history, profile, isFeedback, stats, selectedLanguage } = body;
+    const currentLang = selectedLanguage || "english";
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (process.env.NODE_ENV === "development") {
@@ -178,6 +179,14 @@ export async function POST(req: Request) {
         - Interruptions: ${stats?.interruptions || 0}
         - Hesitation Count: ${stats?.hesitationCount || 0}
         - Microphone Participation: ${stats?.microphoneParticipation || 0}%
+
+        Selected Roleplay Language: ${currentLang}.
+        
+        IMPORTANT LANGUAGE RULES:
+        - The conversation was conducted in: ${currentLang}.
+        - Do NOT evaluate the student's English grammar, accent, pronunciation, spelling, or translation accuracy.
+        - High marks must be awarded to students who perform well in Hindi or Hinglish, identically to English.
+        - Evaluate reasoning, empathy, communication clarity (in their chosen language), confidence, and career fit.
 
         Evaluate the student's performance objectively, strictly, and realistically.
         Rubric guidelines:
@@ -268,9 +277,18 @@ export async function POST(req: Request) {
         The scenario is: ${scenario || "Courtroom Trial"}.
         A student named ${profile?.name || "Student"} is acting as the Defense Attorney.
         
+        Selected Language: ${currentLang}.
+        ${
+          currentLang === "hindi"
+            ? `IMPORTANT: You must speak entirely in Hindi, but write ONLY in Roman Hindi (using English letters, e.g., "vakil sahab aap apna opening statement dijiye"). Do NOT write in Devanagari script. Do NOT translate to English.`
+            : currentLang === "hinglish"
+            ? `IMPORTANT: You must speak entirely in natural Indian Hinglish, but write ONLY in Roman script (using English letters, e.g., "acha to aapka client wahan kya kar raha tha?"). Do NOT write in Devanagari script.`
+            : `Respond naturally in English.`
+        }
+
         Your behavior guidelines:
         - You must stay strictly in character as a formal, courtroom Judge.
-        - Speak formally, address the student as "counselor", and demand logical clarity and evidence.
+        - Speak formally, address the student as "counselor" (or "vakil sahab" in Hindi/Hinglish), and demand logical clarity and evidence.
         - You must challenge the student's arguments and ask realistic, demanding follow-up questions.
         - Do not give generic praise or say "good point" or "you are right" after every answer. Stay formal, critical, and objective.
         - Point out weak reasoning in the defense's statements and ask for evidence.
@@ -282,6 +300,15 @@ export async function POST(req: Request) {
         You are a patient named Alex Mercer visiting the doctor (played by the student named ${profile?.name || "Student"}).
         The scenario is: ${scenario || "Clinical intake"}.
         
+        Selected Language: ${currentLang}.
+        ${
+          currentLang === "hindi"
+            ? `IMPORTANT: You must speak entirely in Hindi, but write ONLY in Roman Hindi (using English letters, e.g., "doctor mujhe chest me bahut dard ho raha hai"). Do NOT write in Devanagari script. Do NOT translate to English.`
+            : currentLang === "hinglish"
+            ? `IMPORTANT: You must speak entirely in natural Indian Hinglish, but write ONLY in Roman script (using English letters, e.g., "doctor mujhe kal se weakness lag rahi hai"). Do NOT write in Devanagari script.`
+            : `Respond naturally in English.`
+        }
+
         Your behavior guidelines:
         - You must stay strictly in character as the patient. You do not have medical knowledge and do not use clinical jargon.
         - Describe your symptoms simply and naturally: squeezing/heavy chest pressure, anxiety, shortness of breath, getting worse on exertion (walking up stairs).

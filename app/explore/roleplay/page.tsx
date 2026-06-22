@@ -13,6 +13,71 @@ import { useGlobalProfile } from "@/lib/global-state";
 import { db } from "@/lib/database";
 import { cn } from "@/lib/utils";
 
+// Transliteration utility for Devanagari script to Roman script
+function normalizeTranscript(text: string): string {
+  const hasDevanagari = /[\u0900-\u097F]/.test(text);
+  if (!hasDevanagari) return text;
+
+  const vowels: { [key: string]: string } = {
+    'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u', 'ऊ': 'oo', 'ऋ': 'ri',
+    'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au', 'अं': 'an', 'अः': 'ah'
+  };
+
+  const matras: { [key: string]: string } = {
+    'ा': 'aa', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo', 'ृ': 'ri',
+    'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au', 'ं': 'n', 'ः': 'h', 'ॅ': 'e'
+  };
+
+  const consonants: { [key: string]: string } = {
+    'क': 'ka', 'ख': 'kha', 'ग': 'ga', 'घ': 'gha', 'ङ': 'nga',
+    'च': 'cha', 'छ': 'chha', 'ज': 'ja', 'झ': 'jha', 'ञ': 'nya',
+    'ट': 'ta', 'ठ': 'tha', 'ड': 'da', 'ढ': 'dha', 'ण': 'na',
+    'त': 'ta', 'थ': 'tha', 'द': 'da', 'ध': 'dha', 'न': 'na',
+    'प': 'pa', 'फ': 'pha', 'ब': 'ba', 'भ': 'bha', 'म': 'ma',
+    'य': 'ya', 'र': 'ra', 'ल': 'la', 'व': 'va', 'श': 'sha', 'ष': 'sha', 'स': 'sa', 'ह': 'ha',
+    'क्ष': 'ksha', 'त्र': 'tra', 'ज्ञ': 'gya', 'श्र': 'shra'
+  };
+
+  let result = "";
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (vowels[char] !== undefined) {
+      result += vowels[char];
+    } else if (consonants[char] !== undefined) {
+      const nextChar = text[i + 1];
+      if (nextChar === '्') {
+        result += consonants[char].slice(0, -1);
+        i++; // skip halant
+      } else if (nextChar && matras[nextChar] !== undefined) {
+        result += consonants[char].slice(0, -1) + matras[nextChar];
+        i++; // skip matra
+      } else {
+        result += consonants[char];
+      }
+    } else if (matras[char] !== undefined) {
+      result += matras[char];
+    } else if (char === '्') {
+      // ignore standalone halant
+    } else {
+      result += char;
+    }
+  }
+
+  return result
+    .replace(/aa/g, "a")
+    .replace(/hu/g, "hoon")
+    .replace(/ha/g, "hai")
+    .replace(/haii/g, "hai")
+    .replace(/honn/g, "hoon")
+    .replace(/kara/g, "kar")
+    .replace(/raha/g, "rah")
+    .replace(/hona/g, "hone")
+    .replace(/da/g, "de")
+    .replace(/na/g, "na")
+    .toLowerCase()
+    .trim();
+}
+
 // TypeScript type interfaces
 type Message = {
   id: string;
@@ -39,6 +104,7 @@ export default function VoiceRoleplayPage() {
   // App state
   const [career, setCareer] = useState<"lawyer" | "doctor" | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [selectedLanguage, setSelectedLanguage] = useState<"english" | "hindi" | "hinglish">("english");
   const [history, setHistory] = useState<Message[]>([]);
   const [currentInput, setCurrentInput] = useState("");
   
@@ -121,6 +187,13 @@ export default function VoiceRoleplayPage() {
   useEffect(() => { interruptionsRef.current = interruptions; }, [interruptions]);
   useEffect(() => { hesitationCountRef.current = hesitationCount; }, [hesitationCount]);
   useEffect(() => { voiceTurnsCountRef.current = voiceTurnsCount; }, [voiceTurnsCount]);
+
+  // Sync speech recognition language with selectedLanguage
+  useEffect(() => {
+    if (recognitionRef.current) {
+      recognitionRef.current.lang = selectedLanguage === "english" ? "en-US" : "hi-IN";
+    }
+  }, [selectedLanguage]);
 
   const stopAllVoiceActivity = () => {
     if (synthesisRef.current) {
@@ -232,7 +305,7 @@ export default function VoiceRoleplayPage() {
       const rec = new SpeechRecognition();
       rec.continuous = false;
       rec.interimResults = true;
-      rec.lang = "en-IN";
+      rec.lang = selectedLanguage === "english" ? "en-US" : "hi-IN";
 
       rec.onstart = () => {
         if (isSessionEndedRef.current || turnCountRef.current >= MAX_TURNS) {
@@ -273,17 +346,19 @@ export default function VoiceRoleplayPage() {
         }
         
         if (interimTranscript) {
-          setCurrentInput(interimTranscript);
+          const normalizedInterim = normalizeTranscript(interimTranscript);
+          setCurrentInput(normalizedInterim);
           setMicStatus("processing");
         }
         
         if (finalTranscript) {
           const cleanFinal = finalTranscript.trim();
           if (cleanFinal) {
-            setCurrentInput(cleanFinal);
+            const normalizedFinal = normalizeTranscript(cleanFinal);
+            setCurrentInput(normalizedFinal);
 
             // Track hesitations
-            const hesitations = cleanFinal.match(/\b(um|uh|er|ah|like|hmmm|well)\b/gi) || [];
+            const hesitations = normalizedFinal.match(/\b(um|uh|er|ah|like|hmmm|well)\b/gi) || [];
             if (hesitations.length > 0) {
               const nextHesitations = hesitationCountRef.current + hesitations.length;
               setHesitationCount(nextHesitations);
@@ -308,7 +383,7 @@ export default function VoiceRoleplayPage() {
                 rec.abort();
               } catch {}
               
-              handleSendMessage(cleanFinal);
+              handleSendMessage(normalizedFinal);
             }
           }
         }
@@ -438,9 +513,18 @@ export default function VoiceRoleplayPage() {
     const utterance = new SpeechSynthesisUtterance(cleanText);
     utterance.rate = 1.05;
     
+    if (selectedLanguage === "english") {
+      utterance.lang = "en-US";
+    } else {
+      utterance.lang = "hi-IN";
+    }
+    
     // Choose appropriate voice
     const voices = synthesisRef.current.getVoices();
-    if (careerRef.current === "lawyer") {
+    if (selectedLanguage !== "english") {
+      const hindiVoice = voices.find(v => v.lang.toLowerCase().startsWith("hi"));
+      if (hindiVoice) utterance.voice = hindiVoice;
+    } else if (careerRef.current === "lawyer") {
       const maleVoice = voices.find(v => 
         v.name.toLowerCase().includes("male") || 
         v.name.toLowerCase().includes("google uk english male") || 
@@ -662,50 +746,93 @@ export default function VoiceRoleplayPage() {
   // Get contextual fallback response if Gemini is unavailable
   const getContextualFallbackResponse = (userMsg: string, currentHistory: Message[], selectedCareer: "lawyer" | "doctor" | null) => {
     const cleanMsg = userMsg.toLowerCase();
+    const isHindiOrHinglish = selectedLanguage === "hindi" || selectedLanguage === "hinglish";
     
     if (selectedCareer === "lawyer") {
-      if (cleanMsg.includes("innocent") || cleanMsg.includes("not guilty")) {
-        return "The defense claims innocence. However, counselor, the prosecution's evidence stands. What specific alibi or record can you show to disprove their presence at the scene?";
+      if (isHindiOrHinglish) {
+        if (cleanMsg.includes("innocent") || cleanMsg.includes("bekasoor") || cleanMsg.includes("gunah")) {
+          return "Vakil sahab, defence bekasoor hone ka claim kar raha hai. Lekin prosecution ke saboot mazboot hain. Aapke paas kya alibi ya record hai jo unhe scene par na hona prove kare?";
+        }
+        if (cleanMsg.includes("evidence") || cleanMsg.includes("proof") || cleanMsg.includes("saboot") || cleanMsg.includes("alibi")) {
+          return "Court ne aapke saboot ko note kar liya hai. Par counselor, security camera footage bilkul saaf hai. Alarm bajne par aapka client wahan se kyu bhaaga?";
+        }
+        if (cleanMsg.includes("flight") || cleanMsg.includes("ran") || cleanMsg.includes("scared") || cleanMsg.includes("bhaag") || cleanMsg.includes("panic")) {
+          return "Bekasoor aadmi ko bhaagne ki koi zaroorat nahi hoti. Court ko is baat par yakeen nahi hai. Aap apna aakhri defense argument pesh karein.";
+        }
+        if (cleanMsg.includes("trespass") || cleanMsg.includes("theft") || cleanMsg.includes("stole") || cleanMsg.includes("stolen") || cleanMsg.includes("chori")) {
+          return "Silent alarm ke hisab se trespass aur theft ke charges lagaye gaye hain. Aapka argument in logs ko kaise galat prove karta hai, counselor?";
+        }
+        if (cleanMsg.includes("witness") || cleanMsg.includes("testimony") || cleanMsg.includes("statement") || cleanMsg.includes("gawah")) {
+          return "Witness ka bayan record kiya ja chuka hai. Counselor, aap is timeline me kisi aisi gadbadi ko point karein jo aapke client ko support kare.";
+        }
+        return `Vakil sahab, aapne kaha: "${userMsg}". Court ko batayein ki ye point state ke main saboot ko kaise kamzor karta hai.`;
+      } else {
+        if (cleanMsg.includes("innocent") || cleanMsg.includes("not guilty")) {
+          return "The defense claims innocence. However, counselor, the prosecution's evidence stands. What specific alibi or record can you show to disprove their presence at the scene?";
+        }
+        if (cleanMsg.includes("evidence") || cleanMsg.includes("proof") || cleanMsg.includes("alibi")) {
+          return "The Court notes your reference to the evidence. But counselor, the security footage is clear. How do you explain your client's flight response when the alarm sounded?";
+        }
+        if (cleanMsg.includes("flight") || cleanMsg.includes("ran") || cleanMsg.includes("scared") || cleanMsg.includes("panic")) {
+          return "An innocent person has no reason to run. The court remains skeptical of this explanation. Please summarize your final defense argument counselor.";
+        }
+        if (cleanMsg.includes("trespass") || cleanMsg.includes("theft") || cleanMsg.includes("stole") || cleanMsg.includes("stolen")) {
+          return "The charges of trespass and felony theft are supported by the silent alarm log. How does your argument refute the timestamped entry logs, counselor?";
+        }
+        if (cleanMsg.includes("witness") || cleanMsg.includes("testimony") || cleanMsg.includes("statement")) {
+          return "The witness testimony has been sworn and recorded. Counselor, point out any specific contradictions in their timeline that support your client.";
+        }
+        return `Counselor, you argued: "${userMsg}". Address the court directly on how this specific point refutes the state's prime evidence.`;
       }
-      if (cleanMsg.includes("evidence") || cleanMsg.includes("proof") || cleanMsg.includes("alibi")) {
-        return "The Court notes your reference to the evidence. But counselor, the security footage is clear. How do you explain your client's flight response when the alarm sounded?";
-      }
-      if (cleanMsg.includes("flight") || cleanMsg.includes("ran") || cleanMsg.includes("scared") || cleanMsg.includes("panic")) {
-        return "An innocent person has no reason to run. The court remains skeptical of this explanation. Please summarize your final defense argument counselor.";
-      }
-      if (cleanMsg.includes("trespass") || cleanMsg.includes("theft") || cleanMsg.includes("stole") || cleanMsg.includes("stolen")) {
-        return "The charges of trespass and felony theft are supported by the silent alarm log. How does your argument refute the timestamped entry logs, counselor?";
-      }
-      if (cleanMsg.includes("witness") || cleanMsg.includes("testimony") || cleanMsg.includes("statement")) {
-        return "The witness testimony has been sworn and recorded. Counselor, point out any specific contradictions in their timeline that support your client.";
-      }
-      return `Counselor, you argued: "${userMsg}". Address the court directly on how this specific point refutes the state's prime evidence.`;
     } else {
-      if (cleanMsg.includes("pain") || cleanMsg.includes("constriction") || cleanMsg.includes("hurt") || cleanMsg.includes("sensation")) {
-        return "Yes, doctor. It is a squeezing, heavy weight right in my chest. It doesn't get better when I rest, and I feel quite sweaty. Do you think this is a heart issue?";
+      if (isHindiOrHinglish) {
+        if (cleanMsg.includes("pain") || cleanMsg.includes("constriction") || cleanMsg.includes("hurt") || cleanMsg.includes("sensation") || cleanMsg.includes("dard")) {
+          return "Haan doctor, mere chest me bahut zyada pressure aur dard feel ho raha hai. Rest karne par bhi thik nahi ho raha, aur thoda sweat bhi aa raha hai. Kya ye koi serious issue hai?";
+        }
+        if (cleanMsg.includes("family") || cleanMsg.includes("father") || cleanMsg.includes("history") || cleanMsg.includes("parents") || cleanMsg.includes("parivar")) {
+          return "Mere father ko bhi fifty ki age me heart surgery karwani padi thi. Isliye mujhe bahut darr lag raha hai, doctor. Mujhe kya hua hai?";
+        }
+        if (cleanMsg.includes("diagnose") || cleanMsg.includes("think") || cleanMsg.includes("angina") || cleanMsg.includes("heart") || cleanMsg.includes("dil")) {
+          return "Angina... ye kya hota hai? Kya isko confirm karne ke liye koi test karna hoga? Agar mujhe raat ko phir se dard ho to kya emergency me jana chahiye?";
+        }
+        if (cleanMsg.includes("emergency") || cleanMsg.includes("ecg") || cleanMsg.includes("test") || cleanMsg.includes("hospital") || cleanMsg.includes("ilaj")) {
+          return "Explain karne ke liye thank you, doctor. Mujhe ab thoda relief feel ho raha hai. Main kal subah hi ECG test schedule karunga. Thank you so much.";
+        }
+        if (cleanMsg.includes("exercise") || cleanMsg.includes("exertion") || cleanMsg.includes("walk") || cleanMsg.includes("stairs") || cleanMsg.includes("trigger") || cleanMsg.includes("chal")) {
+          return "Jab main stairs chadta hoon ya koi physical kaam karta hoon, to dard bahut badh jata hai. Baithne par thoda kam hota hai par heavy lagta hai.";
+        }
+        if (cleanMsg.includes("duration") || cleanMsg.includes("long") || cleanMsg.includes("start") || cleanMsg.includes("hour") || cleanMsg.includes("kab")) {
+          return "Ye lagbhag do ghante pehle shuru hua tha, doctor. Tab se lagatar dard ho raha hai, aur gehra saans lene me bhi dikkat ho rahi hai.";
+        }
+        return `Doctor, mujhe saans lene me thodi pareshani ho rahi hai aur halki nausea bhi feel ho rahi hai. Mujhe kya karna chahiye?`;
+      } else {
+        if (cleanMsg.includes("pain") || cleanMsg.includes("constriction") || cleanMsg.includes("hurt") || cleanMsg.includes("sensation")) {
+          return "Yes, doctor. It is a squeezing, heavy weight right in my chest. It doesn't get better when I rest, and I feel quite sweaty. Do you think this is a heart issue?";
+        }
+        if (cleanMsg.includes("family") || cleanMsg.includes("father") || cleanMsg.includes("history") || cleanMsg.includes("parents")) {
+          return "My father actually had heart surgery when he was fifty. That's why I'm so worried, doctor. What is your initial diagnosis?";
+        }
+        if (cleanMsg.includes("diagnose") || cleanMsg.includes("think") || cleanMsg.includes("angina") || cleanMsg.includes("heart")) {
+          return "Angina... wow, that sounds scary. What tests do I need to confirm this, and should I go to the emergency room if the pain returns tonight?";
+        }
+        if (cleanMsg.includes("emergency") || cleanMsg.includes("ecg") || cleanMsg.includes("test") || cleanMsg.includes("hospital")) {
+          return "Thank you for explaining that, doctor. I feel much more reassured. I will schedule the ECG test first thing tomorrow. Thank you for your care.";
+        }
+        if (cleanMsg.includes("exercise") || cleanMsg.includes("exertion") || cleanMsg.includes("walk") || cleanMsg.includes("stairs") || cleanMsg.includes("trigger")) {
+          return "It definitely gets worse when I walk up stairs or exert myself. When I sit down for a few minutes, it eases slightly, but the heaviness remains. Is that typical?";
+        }
+        if (cleanMsg.includes("duration") || cleanMsg.includes("long") || cleanMsg.includes("start") || cleanMsg.includes("hour")) {
+          return "It started about two hours ago, doctor. It's been constant since then, sometimes getting sharper when I try to take a deep breath.";
+        }
+        return `Doctor, I also feel a bit short of breath and some mild nausea along with this chest pressure. What other symptoms should I be concerned about?`;
       }
-      if (cleanMsg.includes("family") || cleanMsg.includes("father") || cleanMsg.includes("history") || cleanMsg.includes("parents")) {
-        return "My father actually had heart surgery when he was fifty. That's why I'm so worried, doctor. What is your initial diagnosis?";
-      }
-      if (cleanMsg.includes("diagnose") || cleanMsg.includes("think") || cleanMsg.includes("angina") || cleanMsg.includes("heart")) {
-        return "Angina... wow, that sounds scary. What tests do I need to confirm this, and should I go to the emergency room if the pain returns tonight?";
-      }
-      if (cleanMsg.includes("emergency") || cleanMsg.includes("ecg") || cleanMsg.includes("test") || cleanMsg.includes("hospital")) {
-        return "Thank you for explaining that, doctor. I feel much more reassured. I will schedule the ECG test first thing tomorrow. Thank you for your care.";
-      }
-      if (cleanMsg.includes("exercise") || cleanMsg.includes("exertion") || cleanMsg.includes("walk") || cleanMsg.includes("stairs") || cleanMsg.includes("trigger")) {
-        return "It definitely gets worse when I walk up stairs or exert myself. When I sit down for a few minutes, it eases slightly, but the heaviness remains. Is that typical?";
-      }
-      if (cleanMsg.includes("duration") || cleanMsg.includes("long") || cleanMsg.includes("start") || cleanMsg.includes("hour")) {
-        return "It started about two hours ago, doctor. It's been constant since then, sometimes getting sharper when I try to take a deep breath.";
-      }
-      return `Doctor, I also feel a bit short of breath and some mild nausea along with this chest pressure. What other symptoms should I be concerned about?`;
     }
   };
 
   // Submit User Message
   const handleSendMessage = async (textToSend?: string) => {
-    const userText = textToSend !== undefined ? textToSend : currentInput.trim();
+    const rawInput = textToSend !== undefined ? textToSend : currentInput.trim();
+    const userText = normalizeTranscript(rawInput);
     if (!userText.trim()) {
       setIsProcessing(false);
       isProcessingRef.current = false;
@@ -764,7 +891,8 @@ export default function VoiceRoleplayPage() {
           scenario: careerRef.current === "lawyer" ? "Courtroom Trial" : "Clinical intake",
           message: userText,
           history: activeHistory.map(m => ({ role: m.sender === "user" ? "user" : "model", text: m.text })),
-          profile: { name: profile?.name, grade: profile?.grade }
+          profile: { name: profile?.name, grade: profile?.grade },
+          selectedLanguage
         })
       });
 
@@ -1003,7 +1131,8 @@ export default function VoiceRoleplayPage() {
           history: evaluationHistory.map(m => ({ role: m.sender === "user" ? "user" : "model", text: m.text })),
           profile: { name: profile?.name },
           isFeedback: true,
-          stats: statsSummary
+          stats: statsSummary,
+          selectedLanguage
         })
       });
 
@@ -1321,6 +1450,33 @@ export default function VoiceRoleplayPage() {
               <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
                 Step into a high-stakes professional encounter. Practice oral defense under a Judge or evaluate diagnostic symptoms with an anxious patient. Tap the microphone to talk or type manually.
               </p>
+            </div>
+
+            {/* Language Selector */}
+            <div className="rounded-[2rem] border border-border bg-card p-6 shadow-sm flex flex-col md:flex-row items-center justify-between gap-6 bg-gradient-to-r from-violet-500/[0.02] to-transparent">
+              <div className="space-y-1 text-center md:text-left">
+                <h4 className="font-extrabold text-sm uppercase tracking-wider text-slate-700">Roleplay Language / भाषा चुनें</h4>
+                <p className="text-xs text-muted-foreground">Choose the language you want to speak and write in during the simulation.</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                {[
+                  { id: "english", label: "English" },
+                  { id: "hindi", label: "Hindi (Roman script)" },
+                  { id: "hinglish", label: "Hinglish (Hindi + English)" }
+                ].map((lang) => (
+                  <button
+                    key={lang.id}
+                    onClick={() => setSelectedLanguage(lang.id as any)}
+                    className={`px-5 py-2.5 rounded-2xl text-xs font-bold transition-all shadow-sm ${
+                      selectedLanguage === lang.id
+                        ? "bg-primary text-white scale-[1.03]"
+                        : "bg-muted border border-border text-foreground hover:bg-muted/80"
+                    }`}
+                  >
+                    {lang.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
